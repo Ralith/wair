@@ -1,7 +1,5 @@
-use common::*;
-
 pub trait Context {
-    fn new_window<'a>(&'a self, WindowBuilder) -> Result<Box<Window + 'a>, String>;
+    fn new_window<'a>(&'a self, ::common::WindowBuilder) -> Result<Box<Window + 'a>, String>;
 }
 
 pub trait Window {

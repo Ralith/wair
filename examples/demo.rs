@@ -5,6 +5,7 @@ extern crate env_logger;
 
 use tokio_core::reactor::Core;
 use futures::stream::Stream;
+use wair::*;
 
 fn main() {
     env_logger::init().unwrap();
@@ -12,13 +13,17 @@ fn main() {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
 
-    let stream : wair::x11::EventStream = wair::x11::EventStream::new(wair::x11::Context::new().unwrap(), &handle).unwrap();
-    let window = stream.new_window(wair::WindowBuilder::new().name("wair input demo")).unwrap();
+    let stream : x11::EventStream = x11::EventStream::new(x11::Context::new().unwrap(), &handle).unwrap();
+    let window = stream.new_window(WindowBuilder::new().name("wair input demo")).unwrap();
     window.map();
     stream.flush();
 
-    l.run(stream.for_each(|e| {
+    let _ = l.run(stream.for_each(|e| {
         println!("got event: {:?}", e);
-        Ok(())
-    })).unwrap();
+        if let Event::Quit(_) = e {
+            Err(())
+        } else {
+            Ok(())
+        }
+    }));
 }
