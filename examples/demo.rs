@@ -15,7 +15,7 @@ fn main() {
 
     let stream : x11::EventStream = x11::EventStream::new(x11::Context::new().unwrap(), &handle).unwrap();
     let window = stream.new_window(WindowBuilder::new().name("wair input demo")).unwrap();
-    window.map();
+    stream.window_map(window);
     stream.flush();
 
     let _ = l.run(stream.for_each(|e| {

@@ -7,8 +7,6 @@ extern crate tokio_core;
 mod common;
 pub use common::*;
 
-pub mod dynamic;
-
 #[cfg(feature = "x11")]
 pub mod x11;
 

@@ -1,9 +1,18 @@
+use std::fmt::Debug;
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct AxisID(pub i32);
+
 #[derive(Debug)]
-pub enum Event<Window> {
-    Map(Window),
-    Unmap(Window),
-    Quit(Window)
+pub enum Event<W : WindowID, D : DeviceID> {
+    Map(W),
+    Unmap(W),
+    Quit(W),
+    RawMotion{ device: D, axis: AxisID, value: f64 },
 }
+
+pub trait WindowID: Debug + Copy {}
+pub trait DeviceID: Debug + Copy {}
 
 pub struct WindowBuilder<'a> {
     pub name: &'a str,
