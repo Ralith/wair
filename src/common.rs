@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct AxisID(pub i32);
@@ -6,8 +6,14 @@ pub struct AxisID(pub i32);
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct ButtonID(pub i32);
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct ScanCode(pub i32);
+
+impl fmt::Debug for ScanCode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ScanCode({:X})", self.0)
+    }
+}
 
 #[derive(Debug)]
 pub enum Event<W : WindowID, D : DeviceID> {
@@ -19,8 +25,8 @@ pub enum Event<W : WindowID, D : DeviceID> {
     RawKey { device: D, scancode: ScanCode, pressed: bool },
 }
 
-pub trait WindowID: Debug + Copy {}
-pub trait DeviceID: Debug + Copy {}
+pub trait WindowID: fmt::Debug + Copy {}
+pub trait DeviceID: fmt::Debug + Copy {}
 
 pub struct WindowBuilder<'a> {
     pub name: &'a str,
