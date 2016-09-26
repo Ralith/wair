@@ -344,7 +344,7 @@ impl Context {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
                                 self.buffer.push_back(Event::RawKey {
                                     device: DeviceID(evt.deviceid),
-                                    scancode: ScanCode(evt.detail),
+                                    scan_code: ScanCode(evt.detail),
                                     pressed: true
                                 });
                             },
@@ -352,7 +352,7 @@ impl Context {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
                                 self.buffer.push_back(Event::RawKey {
                                     device: DeviceID(evt.deviceid),
-                                    scancode: ScanCode(evt.detail),
+                                    scan_code: ScanCode(evt.detail),
                                     pressed: false
                                 });
                             },
