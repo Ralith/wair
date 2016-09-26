@@ -7,7 +7,7 @@ pub struct AxisID(pub i32);
 pub struct ButtonID(pub i32);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct ScanCode(pub i32);
+pub struct ScanCode(pub u32);
 
 impl fmt::Debug for ScanCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -21,8 +21,16 @@ pub enum Event<W : WindowID, D : DeviceID> {
     Unmap(W),
     Quit(W),
     RawMotion { device: D, axis: AxisID, value: f64 },
-    RawButton { device: D, button: ButtonID, pressed: bool },
-    RawKey { device: D, scan_code: ScanCode, pressed: bool },
+    Motion { device: D, axis: AxisID, value: f64 },
+    PointerMotion { device: D, pos: (f64, f64) },
+    RawButtonPress { device: D, button: ButtonID },
+    RawButtonRelease { device: D, button: ButtonID },
+    ButtonPress { device: D, button: ButtonID },
+    ButtonRelease { device: D, button: ButtonID },
+    RawKeyPress { device: D, scan_code: ScanCode },
+    RawKeyRelease { device: D, scan_code: ScanCode },
+    KeyPress { device: D, scan_code: ScanCode, text: String },
+    KeyRelease { device: D, scan_code: ScanCode },
     DeviceChange { device: D, connected: bool },
 }
 
