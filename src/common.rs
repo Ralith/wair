@@ -23,6 +23,7 @@ pub enum Event<W : WindowID, D : DeviceID> {
     RawMotion { device: D, axis: AxisID, value: f64 },
     RawButton { device: D, button: ButtonID, pressed: bool },
     RawKey { device: D, scan_code: ScanCode, pressed: bool },
+    DeviceChange { device: D, connected: bool },
 }
 
 pub trait WindowID: fmt::Debug + Copy {}

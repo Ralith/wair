@@ -208,7 +208,7 @@ impl Context {
         let devices =
             if let &Some(ref ext) = &self.xinput2 {
                 // Register for device hotplug events
-                let mask = xinput2::XI_HierarchyChanged;
+                let mask = xinput2::XI_HierarchyChangedMask;
                 unsafe {
                     let mut event_mask = xinput2::XIEventMask{
                         deviceid: xinput2::XIAllDevices,
@@ -233,10 +233,6 @@ impl Context {
         let device = DeviceID(info.deviceid);
         let name = unsafe { CStr::from_ptr(info.name).to_string_lossy() };
         trace!("opening device {}: \"{}\"", info.deviceid, name);
-        if info.enabled == 0 {
-            trace!("device {:?} is disabled, bailing out", device);
-            return;
-        }
 
         if info._use == xinput2::XISlaveKeyboard || info._use == xinput2::XISlavePointer || info._use == xinput2::XIFloatingSlave {
             // Real hardware
@@ -252,7 +248,8 @@ impl Context {
                 (xinput2.XISelectEvents)(self.display, self.default_root(), &mut event_mask as *mut xinput2::XIEventMask, 1);
             };
         } else {
-            trace!("deice {:?} is virtual, bailing out", device);
+            trace!("{:?} is virtual, bailing out", device);
+            return;
         }
 
         let classes : &[*const xinput2::XIAnyClassInfo] =
@@ -309,8 +306,8 @@ impl Context {
             GenericEvent => {
                 let mut xcookie = &mut XGenericEventCookie::from(storage);
                 let mut handled = false;
-                if let &Some(ref ext) = &self.xinput2 {
-                    if xcookie.extension == ext.opcode {
+                if let Some(opcode) = self.xinput2.as_ref().map(|ext| ext.opcode) {
+                    if xcookie.extension == opcode {
                         handled = true;
                         unsafe { (self.xlib.XGetEventData)(self.display, xcookie as *mut xlib::XGenericEventCookie); };
                         use self::x11_dl::xinput2::*;
@@ -361,6 +358,25 @@ impl Context {
                                     scan_code: ScanCode(evt.detail),
                                     pressed: false
                                 });
+                            },
+                            XI_HierarchyChanged => {
+                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIHierarchyEvent>(xcookie.data) };
+                                for info in unsafe { slice::from_raw_parts(evt.info, evt.num_info as usize) } {
+                                    if 0 != info.flags & XISlaveAdded {
+                                        for di in self.query_device(info.deviceid) {
+                                            self.buffer.push_back(Event::DeviceChange {
+                                                device: DeviceID(di.deviceid),
+                                                connected: true,
+                                            });
+                                            self.open_device(&di);
+                                        }
+                                    } else if 0 != info.flags & XISlaveRemoved {
+                                        self.buffer.push_back(Event::DeviceChange {
+                                            device: DeviceID(info.deviceid),
+                                            connected: false,
+                                        });
+                                    }
+                                }
                             },
                             ty => {
                                 debug!("unhandled XInput2 event type {}", ty);
