@@ -4,7 +4,7 @@ extern crate libc;
 use self::x11_dl::xlib;
 use self::x11_dl::xinput2;
 
-use std::{io, mem, slice};
+use std::{io, mem, slice, fmt};
 use std::collections::VecDeque;
 use std::ops::Deref;
 use std::ffi::{CString, CStr};
@@ -33,8 +33,14 @@ pub struct Context {
     buffer: VecDeque<<EventStream as futures::stream::Stream>::Item>,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct WindowID(xlib::Window);
+
+impl fmt::Debug for WindowID {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "WindowID({:X})", self.0)
+    }
+}
 
 impl common::WindowID for WindowID {}
 
