@@ -1,5 +1,4 @@
 extern crate x11_dl;
-extern crate libc;
 
 use self::x11_dl::xlib;
 use self::x11_dl::xinput2;
@@ -11,6 +10,8 @@ use std::ffi::{CString, CStr};
 use std::ptr;
 use std::os::unix::io::{AsRawFd, RawFd};
 
+use libc::*;
+
 use mio;
 use tokio_core::reactor::{PollEvented, Handle};
 use futures;
@@ -20,9 +21,9 @@ use common::{Event, AxisID, ButtonID, ScanCode};
 
 struct Extension<T> {
     lib: T,
-    opcode: libc::c_int,
-    first_event_id: libc::c_int,
-    first_error_id: libc::c_int,
+    opcode: c_int,
+    first_event_id: c_int,
+    first_error_id: c_int,
 }
 
 pub struct Context {
@@ -86,9 +87,9 @@ impl Context {
                     Err("unable to open display".to_string())
                 } else {
                     let atoms = Atoms {
-                        wm_protocols: unsafe { (l.XInternAtom)(d, b"WM_PROTOCOLS\0".as_ptr() as *const libc::c_char, 0) },
-                        wm_delete_window: unsafe { (l.XInternAtom)(d, b"WM_DELETE_WINDOW\0".as_ptr() as *const libc::c_char, 0) },
-                        device_node: unsafe { (l.XInternAtom)(d, b"Device Node\0".as_ptr() as *const libc::c_char, 0) }
+                        wm_protocols: unsafe { (l.XInternAtom)(d, b"WM_PROTOCOLS\0".as_ptr() as *const c_char, 0) },
+                        wm_delete_window: unsafe { (l.XInternAtom)(d, b"WM_DELETE_WINDOW\0".as_ptr() as *const c_char, 0) },
+                        device_node: unsafe { (l.XInternAtom)(d, b"Device Node\0".as_ptr() as *const c_char, 0) }
                     };
                     let xinput2 = match xinput2::XInput2::open() {
                         Err(e) => {
@@ -103,14 +104,14 @@ impl Context {
                                     first_event_id: mem::uninitialized(),
                                     first_error_id: mem::uninitialized(),
                                 };
-                                if 0 != (l.XQueryExtension)(d, b"XInputExtension\0".as_ptr() as *const libc::c_char,
-                                                            &mut result.opcode as *mut libc::c_int,
-                                                            &mut result.first_event_id as *mut libc::c_int,
-                                                            &mut result.first_error_id as *mut libc::c_int
+                                if 0 != (l.XQueryExtension)(d, b"XInputExtension\0".as_ptr() as *const c_char,
+                                                            &mut result.opcode as *mut c_int,
+                                                            &mut result.first_event_id as *mut c_int,
+                                                            &mut result.first_error_id as *mut c_int
                                                             ) {
                                     let mut major = xinput2::XI_2_Major;
                                     let mut minor = xinput2::XI_2_Minor;
-                                    if (result.lib.XIQueryVersion)(d, &mut major as *mut libc::c_int, &mut minor as *mut libc::c_int)
+                                    if (result.lib.XIQueryVersion)(d, &mut major as *mut c_int, &mut minor as *mut c_int)
                                         == xlib::Success as i32 {
                                         Some(result)
                                     } else {
@@ -179,7 +180,7 @@ impl Context {
         unsafe { (self.xlib.XUnmapWindow)(self.display, window.0); };
     }
 
-    fn pending(&self) -> libc::c_int {
+    fn pending(&self) -> c_int {
         unsafe { (self.xlib.XPending)(self.display) }
     }
 
@@ -191,11 +192,11 @@ impl Context {
         }
     }
 
-    fn query_device<'a>(&'a self, device: libc::c_int) -> Vec<xinput2::XIDeviceInfo> {
+    fn query_device<'a>(&'a self, device: c_int) -> Vec<xinput2::XIDeviceInfo> {
         let ext = self.xinput2.as_ref().unwrap();
         unsafe {
             let mut size = mem::uninitialized();
-            let info = (ext.lib.XIQueryDevice)(self.display, device, &mut size as *mut libc::c_int);
+            let info = (ext.lib.XIQueryDevice)(self.display, device, &mut size as *mut c_int);
             slice::from_raw_parts(info, size as usize).to_vec()
         }
     }
@@ -212,8 +213,8 @@ impl Context {
                 unsafe {
                     let mut event_mask = xinput2::XIEventMask{
                         deviceid: xinput2::XIAllDevices,
-                        mask: mem::transmute::<*const i32, *mut libc::c_uchar>(&mask as *const i32),
-                        mask_len: mem::size_of_val(&mask) as libc::c_int,
+                        mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
+                        mask_len: mem::size_of_val(&mask) as c_int,
                     };
                     (ext.lib.XISelectEvents)(self.display, self.default_root(),
                                              &mut event_mask as *mut xinput2::XIEventMask, 1);
@@ -242,8 +243,8 @@ impl Context {
             unsafe {
                 let mut event_mask = xinput2::XIEventMask{
                     deviceid: info.deviceid,
-                    mask: mem::transmute::<*const i32, *mut libc::c_uchar>(&mask as *const i32),
-                    mask_len: mem::size_of_val(&mask) as libc::c_int,
+                    mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
+                    mask_len: mem::size_of_val(&mask) as c_int,
                 };
                 (xinput2.XISelectEvents)(self.display, self.default_root(), &mut event_mask as *mut xinput2::XIEventMask, 1);
             };

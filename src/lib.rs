@@ -3,6 +3,7 @@ extern crate log;
 extern crate futures;
 extern crate mio;
 extern crate tokio_core;
+extern crate libc;
 
 mod common;
 pub use common::*;
