@@ -16,7 +16,7 @@ use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 
 use common;
-use common::{Event, AxisID};
+use common::{Event, AxisID, ButtonID};
 
 struct Extension<T> {
     lib: T,
@@ -251,10 +251,18 @@ impl Context {
         let classes : &[*const xinput2::XIAnyClassInfo] =
             unsafe { slice::from_raw_parts(info.classes as *const *const xinput2::XIAnyClassInfo, info.num_classes as usize) };
         for class_ptr in classes {
+            use self::x11_dl::xinput2::*;
             let class = unsafe { &**class_ptr };
             match class._type {
-                xinput2::XIValuatorClass => {
-                    let axis_info = unsafe { mem::transmute::<&xinput2::XIAnyClassInfo, &xinput2::XIValuatorClassInfo>(class) };
+                XIButtonClass => {
+                    let button_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIButtonClassInfo>(class) };
+                    let mask = unsafe { slice::from_raw_parts(button_info.state.mask, button_info.state.mask_len as usize) };
+                    for i in 0..button_info.num_buttons {
+                        self.buffer.push_back(Event::RawButton { device: device, button: ButtonID(i), pressed: XIMaskIsSet(mask, i) });
+                    }
+                },
+                XIValuatorClass => {
+                    let axis_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIValuatorClassInfo>(class) };
                     self.buffer.push_back(Event::RawMotion{ device: device, axis: AxisID(axis_info.number), value: axis_info.value });
                 },
                 ty => {
@@ -313,6 +321,22 @@ impl Context {
                                         raw_value = unsafe { raw_value.offset(1) };
                                     }
                                 }
+                            },
+                            XI_RawButtonPress => {
+                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                self.buffer.push_back(Event::RawButton {
+                                    device: DeviceID(evt.deviceid),
+                                    button: ButtonID(evt.detail),
+                                    pressed: true
+                                });
+                            },
+                            XI_RawButtonRelease => {
+                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                self.buffer.push_back(Event::RawButton {
+                                    device: DeviceID(evt.deviceid),
+                                    button: ButtonID(evt.detail),
+                                    pressed: false
+                                });
                             },
                             ty => {
                                 debug!("unhandled XInput2 event type {}", ty);
