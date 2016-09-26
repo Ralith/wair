@@ -6,6 +6,9 @@ pub struct AxisID(pub i32);
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct ButtonID(pub i32);
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct ScanCode(pub i32);
+
 #[derive(Debug)]
 pub enum Event<W : WindowID, D : DeviceID> {
     Map(W),
@@ -13,6 +16,7 @@ pub enum Event<W : WindowID, D : DeviceID> {
     Quit(W),
     RawMotion { device: D, axis: AxisID, value: f64 },
     RawButton { device: D, button: ButtonID, pressed: bool },
+    RawKey { device: D, scancode: ScanCode, pressed: bool },
 }
 
 pub trait WindowID: Debug + Copy {}

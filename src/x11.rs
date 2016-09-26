@@ -4,7 +4,7 @@ extern crate libc;
 use self::x11_dl::xlib;
 use self::x11_dl::xinput2;
 
-use std::{io, fmt, mem, slice};
+use std::{io, mem, slice};
 use std::collections::VecDeque;
 use std::ops::Deref;
 use std::ffi::{CString, CStr};
@@ -16,7 +16,7 @@ use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 
 use common;
-use common::{Event, AxisID, ButtonID};
+use common::{Event, AxisID, ButtonID, ScanCode};
 
 struct Extension<T> {
     lib: T,
@@ -30,7 +30,7 @@ pub struct Context {
     atoms: Atoms,
     display: *mut xlib::Display,
     xinput2: Option<Extension<xinput2::XInput2>>,
-    buffer: VecDeque<<EventStream as futures::stream::Stream>::Item>
+    buffer: VecDeque<<EventStream as futures::stream::Stream>::Item>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -222,6 +222,7 @@ impl Context {
         }
     }
 
+    #[allow(non_upper_case_globals)]
     fn open_device(&mut self, info: &xinput2::XIDeviceInfo) {
         let device = DeviceID(info.deviceid);
         let name = unsafe { CStr::from_ptr(info.name).to_string_lossy() };
@@ -254,6 +255,7 @@ impl Context {
             use self::x11_dl::xinput2::*;
             let class = unsafe { &**class_ptr };
             match class._type {
+                XIKeyClass => (),
                 XIButtonClass => {
                     let button_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIButtonClassInfo>(class) };
                     let mask = unsafe { slice::from_raw_parts(button_info.state.mask, button_info.state.mask_len as usize) };
@@ -335,6 +337,22 @@ impl Context {
                                 self.buffer.push_back(Event::RawButton {
                                     device: DeviceID(evt.deviceid),
                                     button: ButtonID(evt.detail),
+                                    pressed: false
+                                });
+                            },
+                            XI_RawKeyPress => {
+                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                self.buffer.push_back(Event::RawKey {
+                                    device: DeviceID(evt.deviceid),
+                                    scancode: ScanCode(evt.detail),
+                                    pressed: true
+                                });
+                            },
+                            XI_RawKeyRelease => {
+                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                self.buffer.push_back(Event::RawKey {
+                                    device: DeviceID(evt.deviceid),
+                                    scancode: ScanCode(evt.detail),
                                     pressed: false
                                 });
                             },
