@@ -8,6 +8,7 @@ use self::x11_dl::xinput2;
 use self::xkbcommon::xkb;
 
 use std::{io, mem, slice, fmt};
+use std::cell::RefCell;
 use std::collections::{VecDeque, HashMap};
 use std::ops::Deref;
 use std::ffi::{CString, CStr};
@@ -41,10 +42,10 @@ pub struct Context {
     xcb: xcb::base::Connection,
     display: *mut xlib::Display,
     xinput2: Option<Extension<xinput2::XInput2>>,
-    buffer: VecDeque<<EventStream as futures::stream::Stream>::Item>,
+    buffer: RefCell<VecDeque<Event<WindowID, DeviceID>>>,
     xkb: xkb::Context,
     xkb_base_event: u8,
-    keyboards: HashMap<DeviceID, Keyboard>,
+    keyboards: RefCell<HashMap<DeviceID, Keyboard>>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -151,16 +152,16 @@ impl Context {
                         base_event
                     };
                                                   
-                    let mut result = Context {
+                    let result = Context {
                         xlib: l,
                         atoms: atoms,
                         xcb: xcb,
                         display: d,
-                        buffer: VecDeque::new(),
+                        buffer: RefCell::new(VecDeque::new()),
                         xinput2: xinput2,
                         xkb: xkb::Context::new(0),
                         xkb_base_event: xkb_base_event,
-                        keyboards: HashMap::new(),
+                        keyboards: RefCell::new(HashMap::new()),
                     };
                     result.init();
                     Ok(result)
@@ -265,7 +266,7 @@ impl Context {
         unsafe { (self.xlib.XDefaultRootWindow)(self.display) }
     }
 
-    fn init(&mut self) {
+    fn init(&self) {
         let devices =
             if let &Some(ref ext) = &self.xinput2 {
                 // Register for device hotplug events
@@ -290,7 +291,7 @@ impl Context {
     }
 
     #[allow(non_upper_case_globals)]
-    fn open_device(&mut self, info: &xinput2::XIDeviceInfo) {
+    fn open_device(&self, info: &xinput2::XIDeviceInfo) {
         let device = DeviceID(info.deviceid);
         let name = unsafe { CStr::from_ptr(info.name).to_string_lossy() };
         trace!("opening device {}: \"{}\"", info.deviceid, name);
@@ -320,7 +321,7 @@ impl Context {
                 XIKeyClass => {
                     let map = xkb::x11::keymap_new_from_device(&self.xkb, &self.xcb, device.0, 0);
                     let state = xkb::x11::state_new_from_device(&map, &self.xcb, device.0);
-                    self.keyboards.insert(device, Keyboard {
+                    self.keyboards.borrow_mut().insert(device, Keyboard {
                         map: map,
                         state: state,
                     });
@@ -332,7 +333,7 @@ impl Context {
                         let button_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIButtonClassInfo>(class) };
                         let mask = unsafe { slice::from_raw_parts(button_info.state.mask, button_info.state.mask_len as usize) };
                         for i in 0..button_info.num_buttons {
-                            self.buffer.push_back(
+                            self.buffer.borrow_mut().push_back(
                                 if XIMaskIsSet(mask, i) {
                                     Event::RawButtonPress { device: device, button: ButtonID(i) }
                                 } else {
@@ -344,7 +345,7 @@ impl Context {
                 XIValuatorClass => {
                     if real_device {
                         let axis_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIValuatorClassInfo>(class) };
-                        self.buffer.push_back(Event::RawMotion{ device: device, axis: AxisID(axis_info.number), value: axis_info.value });
+                        self.buffer.borrow_mut().push_back(Event::RawMotion{ device: device, axis: AxisID(axis_info.number), value: axis_info.value });
                     }
                 },
                 ty => {
@@ -359,20 +360,22 @@ impl Context {
     }
 
     #[allow(non_upper_case_globals)]
-    fn queue_event(&mut self) {
+    fn queue_event(&self) {
         let storage = self.next_event();
         use self::x11_dl::xlib::*;
         let event = &XAnyEvent::from(&storage);
         let window = WindowID(event.window);
+        let mut buffer = self.buffer.borrow_mut();
+        let mut keyboards = self.keyboards.borrow_mut();
         match event.type_ {
-            MapNotify => self.buffer.push_back(Event::Map(window)),
-            UnmapNotify => self.buffer.push_back(Event::Unmap(window)),
+            MapNotify => buffer.push_back(Event::Map(window)),
+            UnmapNotify => buffer.push_back(Event::Unmap(window)),
             ClientMessage => {
                 let xclient = &XClientMessageEvent::from(&storage);
                 if xclient.message_type == self.atoms.wm_protocols {
                     let atom = xclient.data.get_long(0) as xlib::Atom;
                     if atom == self.atoms.wm_delete_window {
-                        self.buffer.push_back(Event::Quit(window));
+                        buffer.push_back(Event::Quit(window));
                     } else {
                         debug!("unhandled WM_PROTOCOLS message {}", self.atom_name(atom));
                     }
@@ -395,7 +398,7 @@ impl Context {
                                 let mut raw_value = evt.raw_values;
                                 for i in 0..evt.valuators.mask_len*8 {
                                     if XIMaskIsSet(mask, i) {
-                                        self.buffer.push_back(Event::RawMotion {
+                                        buffer.push_back(Event::RawMotion {
                                             device: DeviceID(evt.deviceid),
                                             axis: AxisID(i),
                                             value: unsafe { *raw_value }
@@ -406,36 +409,41 @@ impl Context {
                             },
                             XI_RawButtonPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
-                                self.buffer.push_back(Event::RawButtonPress {
+                                buffer.push_back(Event::RawButtonPress {
                                     device: DeviceID(evt.deviceid),
                                     button: ButtonID(evt.detail),
                                 });
                             },
                             XI_RawButtonRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
-                                self.buffer.push_back(Event::RawButtonRelease {
+                                buffer.push_back(Event::RawButtonRelease {
                                     device: DeviceID(evt.deviceid),
                                     button: ButtonID(evt.detail),
                                 });
                             },
                             XI_RawKeyPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
-                                self.buffer.push_back(Event::RawKeyPress {
+                                let kb = &keyboards[&DeviceID(evt.deviceid)];
+                                buffer.push_back(Event::RawKeyPress {
                                     device: DeviceID(evt.deviceid),
                                     scan_code: ScanCode(evt.detail as u32),
+                                    key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    text: kb.state.key_get_utf8(evt.detail as u32),
                                 });
                             },
                             XI_RawKeyRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
-                                self.buffer.push_back(Event::RawKeyRelease {
+                                let kb = &keyboards[&DeviceID(evt.deviceid)];
+                                buffer.push_back(Event::RawKeyRelease {
                                     device: DeviceID(evt.deviceid),
                                     scan_code: ScanCode(evt.detail as u32),
+                                    key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
                                 });
                             },
                             XI_KeyPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
-                                let kb = &self.keyboards[&DeviceID(evt.deviceid)];
-                                self.buffer.push_back(Event::KeyPress {
+                                let kb = &keyboards[&DeviceID(evt.deviceid)];
+                                buffer.push_back(Event::KeyPress {
                                     device: DeviceID(evt.deviceid),
                                     scan_code: ScanCode(evt.detail as u32),
                                     key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
@@ -444,8 +452,8 @@ impl Context {
                             },
                             XI_KeyRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
-                                let kb = &self.keyboards[&DeviceID(evt.deviceid)];
-                                self.buffer.push_back(Event::KeyRelease {
+                                let kb = &keyboards[&DeviceID(evt.deviceid)];
+                                buffer.push_back(Event::KeyRelease {
                                     device: DeviceID(evt.deviceid),
                                     key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
                                     scan_code: ScanCode(evt.detail as u32),
@@ -453,14 +461,14 @@ impl Context {
                             },
                             XI_ButtonPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
-                                self.buffer.push_back(Event::ButtonPress {
+                                buffer.push_back(Event::ButtonPress {
                                     device: DeviceID(evt.deviceid),
                                     button: ButtonID(evt.detail),
                                 });
                             },
                             XI_ButtonRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
-                                self.buffer.push_back(Event::ButtonRelease {
+                                buffer.push_back(Event::ButtonRelease {
                                     device: DeviceID(evt.deviceid),
                                     button: ButtonID(evt.detail),
                                 });
@@ -471,7 +479,7 @@ impl Context {
                                 let mut value = evt.valuators.values;
                                 for i in 0..evt.valuators.mask_len*8 {
                                     if XIMaskIsSet(mask, i) {
-                                        self.buffer.push_back(Event::Motion {
+                                        buffer.push_back(Event::Motion {
                                             device: DeviceID(evt.deviceid),
                                             axis: AxisID(i),
                                             value: unsafe { *value }
@@ -479,7 +487,7 @@ impl Context {
                                         value = unsafe { value.offset(1) };
                                     }
                                 };
-                                self.buffer.push_back(Event::PointerMotion {
+                                buffer.push_back(Event::PointerMotion {
                                     device: DeviceID(evt.deviceid),
                                     pos: (evt.event_x, evt.event_y),
                                 });
@@ -489,14 +497,14 @@ impl Context {
                                 for info in unsafe { slice::from_raw_parts(evt.info, evt.num_info as usize) } {
                                     if 0 != info.flags & (XISlaveAdded | XIMasterAdded) {
                                         for di in self.query_device(info.deviceid) {
-                                            self.buffer.push_back(Event::DeviceChange {
+                                            buffer.push_back(Event::DeviceChange {
                                                 device: DeviceID(di.deviceid),
                                                 connected: true,
                                             });
                                             self.open_device(&di);
                                         }
                                     } else if 0 != info.flags & (XISlaveRemoved | XIMasterRemoved) {
-                                        self.buffer.push_back(Event::DeviceChange {
+                                        buffer.push_back(Event::DeviceChange {
                                             device: DeviceID(info.deviceid),
                                             connected: false,
                                         });
@@ -517,7 +525,7 @@ impl Context {
             ty => {
                 if ty == self.xkb_base_event as i32 {
                     let xkb_event = unsafe { mem::transmute::<&XEvent, &XkbAnyEvent>(&storage) };
-                    let mut kb = self.keyboards.get_mut(&DeviceID(xkb_event.device as i32)).unwrap();
+                    let mut kb = keyboards.get_mut(&DeviceID(xkb_event.device as i32)).unwrap();
                     match xkb_event.xkb_type {
                         XkbNewKeyboardNotify => {
                             kb.map = self::xkbcommon::xkb::x11::keymap_new_from_device(&self.xkb, &self.xcb, xkb_event.device as i32, 0);
@@ -572,7 +580,7 @@ impl Deref for EventStream {
     fn deref(&self) -> &Context { self.io.get_ref() }
 }
 
-impl futures::stream::Stream for EventStream {
+impl<'a> futures::stream::Stream for &'a EventStream {
     type Item = Event<WindowID, DeviceID>;
     type Error = ();
 
@@ -583,10 +591,10 @@ impl futures::stream::Stream for EventStream {
         }
 
         while self.pending() != 0 {
-            self.io.get_mut().queue_event();
+            self.queue_event();
         }
 
-        Ok(match self.io.get_mut().buffer.pop_front() {
+        Ok(match self.buffer.borrow_mut().pop_front() {
             None => {
                 self.io.need_read();
                 futures::Async::NotReady
