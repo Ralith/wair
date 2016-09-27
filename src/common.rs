@@ -15,6 +15,16 @@ impl fmt::Debug for ScanCode {
     }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub struct KeySym(pub u32);
+
+impl fmt::Debug for KeySym {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "KeySym({:X})", self.0)
+    }
+}
+
+// TODO: Factor into window/device inputs
 #[derive(Debug)]
 pub enum Event<W : WindowID, D : DeviceID> {
     Map(W),
@@ -29,8 +39,8 @@ pub enum Event<W : WindowID, D : DeviceID> {
     ButtonRelease { device: D, button: ButtonID },
     RawKeyPress { device: D, scan_code: ScanCode },
     RawKeyRelease { device: D, scan_code: ScanCode },
-    KeyPress { device: D, scan_code: ScanCode, text: String },
-    KeyRelease { device: D, scan_code: ScanCode },
+    KeyPress { device: D, scan_code: ScanCode, key_sym: KeySym, text: String },
+    KeyRelease { device: D, scan_code: ScanCode, key_sym: KeySym },
     DeviceChange { device: D, connected: bool },
 }
 

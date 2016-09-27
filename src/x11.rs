@@ -21,7 +21,7 @@ use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 
 use common;
-use common::{Event, AxisID, ButtonID, ScanCode};
+use common::{Event, AxisID, ButtonID, ScanCode, KeySym};
 
 struct Extension<T> {
     lib: T,
@@ -227,6 +227,19 @@ impl Context {
         unsafe { (self.xlib.XUnmapWindow)(self.display, window.0); };
     }
 
+    pub fn key_sym_name(key: KeySym) -> String {
+        self::xkbcommon::xkb::keysym_get_name(key.0)
+    }
+
+    pub fn key_sym_from_name(name: &str) -> Option<KeySym> {
+        let sym = self::xkbcommon::xkb::keysym_from_name(name, 0);
+        if sym == xkb::keysyms::KEY_NoSymbol {
+            None
+        } else {
+            Some(KeySym(sym))
+        }
+    }
+
     fn pending(&self) -> c_int {
         unsafe { (self.xlib.XPending)(self.display) }
     }
@@ -425,6 +438,7 @@ impl Context {
                                 self.buffer.push_back(Event::KeyPress {
                                     device: DeviceID(evt.deviceid),
                                     scan_code: ScanCode(evt.detail as u32),
+                                    key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
                                     text: kb.state.key_get_utf8(evt.detail as u32),
                                 });
                             },
@@ -433,6 +447,7 @@ impl Context {
                                 let kb = &self.keyboards[&DeviceID(evt.deviceid)];
                                 self.buffer.push_back(Event::KeyRelease {
                                     device: DeviceID(evt.deviceid),
+                                    key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
                                     scan_code: ScanCode(evt.detail as u32),
                                 });
                             },
