@@ -1,10 +1,9 @@
 extern crate x11;
-extern crate x11_dl;
 extern crate xcb;
 extern crate xkbcommon;
 
-use self::x11_dl::xlib;
-use self::x11_dl::xinput2;
+use self::x11::xlib;
+use self::x11::xinput2;
 use self::xkbcommon::xkb;
 
 use std::{io, mem, slice, fmt};
@@ -24,8 +23,7 @@ use futures;
 use common;
 use common::{Event, AxisID, ButtonID, ScanCode, KeySym};
 
-struct Extension<T> {
-    lib: T,
+struct Extension {
     opcode: c_int,
     first_event_id: c_int,
     first_error_id: c_int,
@@ -37,11 +35,10 @@ struct Keyboard {
 }
 
 pub struct Context {
-    xlib: xlib::Xlib,
     atoms: Atoms,
     xcb: xcb::base::Connection,
     display: *mut xlib::Display,
-    xinput2: Option<Extension<xinput2::XInput2>>,
+    xinput2: Option<Extension>,
     buffer: RefCell<VecDeque<Event<WindowID, DeviceID>>>,
     xkb: xkb::Context,
     xkb_base_event: u8,
@@ -80,111 +77,96 @@ unsafe impl Sync for Context {}
 
 impl AsRawFd for Context {
     fn as_raw_fd(&self) -> RawFd {
-        unsafe { (self.xlib.XConnectionNumber)(self.display) }
+        unsafe { xlib::XConnectionNumber(self.display) }
     }
 }
 
 impl Context {
     pub fn new() -> Result<Context, String> {
-        match xlib::Xlib::open() {
-            Err(e) => Err(e.detail().to_string()),
-            Ok(l) => {
-                unsafe { (l.XInitThreads)(); };
-                let d = unsafe { (l.XOpenDisplay)(ptr::null()) };
-                if d.is_null() {
-                    Err("unable to open display".to_string())
-                } else {
-                    let atoms = Atoms {
-                        wm_protocols: unsafe { (l.XInternAtom)(d, b"WM_PROTOCOLS\0".as_ptr() as *const c_char, 0) },
-                        wm_delete_window: unsafe { (l.XInternAtom)(d, b"WM_DELETE_WINDOW\0".as_ptr() as *const c_char, 0) },
-                        device_node: unsafe { (l.XInternAtom)(d, b"Device Node\0".as_ptr() as *const c_char, 0) },
-                    };
-                    let xinput2 = match xinput2::XInput2::open() {
-                        Err(e) => {
-                            warn!("unable to load XInput2 library: {}", e.detail().to_string());
+        unsafe { xlib::XInitThreads(); };
+        let d = unsafe { xlib::XOpenDisplay(ptr::null()) };
+        if d.is_null() {
+            Err("unable to open display".to_string())
+        } else {
+            let atoms = Atoms {
+                wm_protocols: unsafe { xlib::XInternAtom(d, b"WM_PROTOCOLS\0".as_ptr() as *const c_char, 0) },
+                wm_delete_window: unsafe { xlib::XInternAtom(d, b"WM_DELETE_WINDOW\0".as_ptr() as *const c_char, 0) },
+                device_node: unsafe { xlib::XInternAtom(d, b"Device Node\0".as_ptr() as *const c_char, 0) },
+            };
+            let xinput2 = unsafe {
+                let mut result = Extension {
+                    opcode: mem::uninitialized(),
+                    first_event_id: mem::uninitialized(),
+                    first_error_id: mem::uninitialized(),
+                };
+                if 0 != xlib::XQueryExtension(d, b"XInputExtension\0".as_ptr() as *const c_char,
+                                              &mut result.opcode as *mut c_int,
+                                              &mut result.first_event_id as *mut c_int,
+                                              &mut result.first_error_id as *mut c_int
+                                              ) {
+                    let mut major = xinput2::XI_2_Major;
+                    let mut minor = xinput2::XI_2_Minor;
+                    if xinput2::XIQueryVersion(d, &mut major as *mut c_int, &mut minor as *mut c_int)
+                        == xlib::Success as i32 {
+                            Some(result)
+                        } else {
+                            warn!("X server missing support for required XInput2 version {}.{}, has {}.{}",
+                                  xinput2::XI_2_Major, xinput2::XI_2_Minor,
+                                  major, minor);
                             None
-                        },
-                        Ok(xi) => {
-                            unsafe {
-                                let mut result = Extension {
-                                    lib: xi,
-                                    opcode: mem::uninitialized(),
-                                    first_event_id: mem::uninitialized(),
-                                    first_error_id: mem::uninitialized(),
-                                };
-                                if 0 != (l.XQueryExtension)(d, b"XInputExtension\0".as_ptr() as *const c_char,
-                                                            &mut result.opcode as *mut c_int,
-                                                            &mut result.first_event_id as *mut c_int,
-                                                            &mut result.first_error_id as *mut c_int
-                                                            ) {
-                                    let mut major = xinput2::XI_2_Major;
-                                    let mut minor = xinput2::XI_2_Minor;
-                                    if (result.lib.XIQueryVersion)(d, &mut major as *mut c_int, &mut minor as *mut c_int)
-                                        == xlib::Success as i32 {
-                                        Some(result)
-                                    } else {
-                                        warn!("X server missing support for required XInput2 version {}.{}, has {}.{}",
-                                              xinput2::XI_2_Major, xinput2::XI_2_Minor,
-                                              major, minor);
-                                        None
-                                    }
-                                } else {
-                                    warn!("X server missing XInput2 extension");
-                                    None
-                                }
-                            }
                         }
-                    };
-                    let xcb = unsafe { xcb::base::Connection::new_from_xlib_display(d as *mut x11::xlib::_XDisplay) };
-                    let xkb_base_event = unsafe {
-                        let mut major_xkb_version = mem::uninitialized();
-                        let mut minor_xkb_version = mem::uninitialized();
-                        let mut base_event = mem::uninitialized();
-                        let mut base_error = mem::uninitialized();
-                        let success = xkb::x11::setup_xkb_extension(
-                            &xcb, xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION,
-                            xkb::x11::SetupXkbExtensionFlags::NoFlags,
-                            &mut major_xkb_version, &mut minor_xkb_version,
-                            &mut base_event, &mut base_error);
-                        if !success {
-                            panic!("X server missing XKB {}.{}", xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION);
-                        }
-                        base_event
-                    };
-                                                  
-                    let result = Context {
-                        xlib: l,
-                        atoms: atoms,
-                        xcb: xcb,
-                        display: d,
-                        buffer: RefCell::new(VecDeque::new()),
-                        xinput2: xinput2,
-                        xkb: xkb::Context::new(0),
-                        xkb_base_event: xkb_base_event,
-                        keyboards: RefCell::new(HashMap::new()),
-                    };
-                    result.init();
-                    Ok(result)
+                } else {
+                    warn!("X server missing XInput2 extension");
+                    None
                 }
-            }
+            };
+            let xcb = unsafe { xcb::base::Connection::new_from_xlib_display(d as *mut x11::xlib::_XDisplay) };
+            let xkb_base_event = unsafe {
+                let mut major_xkb_version = mem::uninitialized();
+                let mut minor_xkb_version = mem::uninitialized();
+                let mut base_event = mem::uninitialized();
+                let mut base_error = mem::uninitialized();
+                let success = xkb::x11::setup_xkb_extension(
+                    &xcb, xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION,
+                    xkb::x11::SetupXkbExtensionFlags::NoFlags,
+                    &mut major_xkb_version, &mut minor_xkb_version,
+                    &mut base_event, &mut base_error);
+                if !success {
+                    panic!("X server missing XKB {}.{}", xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION);
+                }
+                base_event
+            };
+            
+            let result = Context {
+                atoms: atoms,
+                xcb: xcb,
+                display: d,
+                buffer: RefCell::new(VecDeque::new()),
+                xinput2: xinput2,
+                xkb: xkb::Context::new(0),
+                xkb_base_event: xkb_base_event,
+                keyboards: RefCell::new(HashMap::new()),
+            };
+            result.init();
+            Ok(result)
         }
     }
 
     pub fn flush(&self) {
-        unsafe { (self.xlib.XFlush)(self.display); };
+        unsafe { xlib::XFlush(self.display); };
     }
 
     pub fn new_window(&self, builder: common::WindowBuilder) -> Result<WindowID, String> {
         let border_width = 0;
         let handle = unsafe {
-            let screen = (self.xlib.XDefaultScreenOfDisplay)(self.display);
-            let root = (self.xlib.XRootWindowOfScreen)(screen);
-            let depth = (self.xlib.XDefaultDepthOfScreen)(screen);
-            let visual = (self.xlib.XDefaultVisualOfScreen)(screen);
+            let screen = xlib::XDefaultScreenOfDisplay(self.display);
+            let root = xlib::XRootWindowOfScreen(screen);
+            let depth = xlib::XDefaultDepthOfScreen(screen);
+            let visual = xlib::XDefaultVisualOfScreen(screen);
             let mut attrs : xlib::XSetWindowAttributes = mem::uninitialized();
             attrs.event_mask = xlib::StructureNotifyMask;
-            attrs.background_pixel = (self.xlib.XBlackPixelOfScreen)(screen);
-            (self.xlib.XCreateWindow)(self.display, root, builder.position.0, builder.position.1, builder.size.0, builder.size.1, border_width, depth,
+            attrs.background_pixel = xlib::XBlackPixelOfScreen(screen);
+            xlib::XCreateWindow(self.display, root, builder.position.0, builder.position.1, builder.size.0, builder.size.1, border_width, depth,
                                       xlib::InputOutput as u32, visual, xlib::CWEventMask | xlib::CWBackPixel,
                                       &mut attrs as *mut xlib::XSetWindowAttributes)
         };
@@ -200,7 +182,7 @@ impl Context {
                     mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
                     mask_len: mem::size_of_val(&mask) as c_int,
                 };
-                (ext.lib.XISelectEvents)(self.display, handle,
+                xinput2::XISelectEvents(self.display, handle,
                                          &mut event_mask as *mut xinput2::XIEventMask, 1);
             };
 
@@ -208,7 +190,7 @@ impl Context {
         }
 
         // Opt into application handling of window close
-        unsafe { (self.xlib.XSetWMProtocols)(self.display, handle,
+        unsafe { xlib::XSetWMProtocols(self.display, handle,
                                              mem::transmute::<*const xlib::Atom, *mut xlib::Atom>(&self.atoms.wm_delete_window as *const xlib::Atom), 1); };
         let window = WindowID(handle);
         self.window_set_name(window, builder.name);
@@ -217,15 +199,15 @@ impl Context {
 
     pub fn window_set_name(&self, window: WindowID, name: &str) {
         let c_name = CString::new(name).unwrap();
-        unsafe { (self.xlib.XStoreName)(self.display, window.0, c_name.as_ptr()); };
+        unsafe { xlib::XStoreName(self.display, window.0, c_name.as_ptr()); };
     }
 
     pub fn window_map(&self, window: WindowID) {
-        unsafe { (self.xlib.XMapWindow)(self.display, window.0); };
+        unsafe { xlib::XMapWindow(self.display, window.0); };
     }
 
     pub fn window_unmap(&self, window: WindowID) {
-        unsafe { (self.xlib.XUnmapWindow)(self.display, window.0); };
+        unsafe { xlib::XUnmapWindow(self.display, window.0); };
     }
 
     pub fn key_sym_name(key: KeySym) -> String {
@@ -242,13 +224,13 @@ impl Context {
     }
 
     fn pending(&self) -> c_int {
-        unsafe { (self.xlib.XPending)(self.display) }
+        unsafe { xlib::XPending(self.display) }
     }
 
     fn next_event(&self) -> xlib::XEvent {
         unsafe {
             let mut event = mem::uninitialized();
-            (self.xlib.XNextEvent)(self.display, &mut event as *mut xlib::XEvent);
+            xlib::XNextEvent(self.display, &mut event as *mut xlib::XEvent);
             event
         }
     }
@@ -257,13 +239,13 @@ impl Context {
         let ext = self.xinput2.as_ref().unwrap();
         unsafe {
             let mut size = mem::uninitialized();
-            let info = (ext.lib.XIQueryDevice)(self.display, device, &mut size as *mut c_int);
+            let info = xinput2::XIQueryDevice(self.display, device, &mut size as *mut c_int);
             slice::from_raw_parts(info, size as usize).to_vec()
         }
     }
 
     fn default_root(&self) -> xlib::Window {
-        unsafe { (self.xlib.XDefaultRootWindow)(self.display) }
+        unsafe { xlib::XDefaultRootWindow(self.display) }
     }
 
     fn init(&self) {
@@ -277,7 +259,7 @@ impl Context {
                         mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
                         mask_len: mem::size_of_val(&mask) as c_int,
                     };
-                    (ext.lib.XISelectEvents)(self.display, self.default_root(),
+                    xinput2::XISelectEvents(self.display, self.default_root(),
                                              &mut event_mask as *mut xinput2::XIEventMask, 1);
                 };
 
@@ -299,7 +281,6 @@ impl Context {
         let real_device = info._use == xinput2::XISlaveKeyboard || info._use == xinput2::XISlavePointer || info._use == xinput2::XIFloatingSlave;
         if real_device {
             // Register for raw events
-            let xinput2 = &self.xinput2.as_ref().unwrap().lib;
             let mask = xinput2::XI_RawMotionMask | xinput2::XI_RawButtonPressMask | xinput2::XI_RawButtonReleaseMask
                 | xinput2::XI_RawKeyPressMask | xinput2::XI_RawKeyReleaseMask;
             unsafe {
@@ -308,14 +289,14 @@ impl Context {
                     mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
                     mask_len: mem::size_of_val(&mask) as c_int,
                 };
-                (xinput2.XISelectEvents)(self.display, self.default_root(), &mut event_mask as *mut xinput2::XIEventMask, 1);
+                xinput2::XISelectEvents(self.display, self.default_root(), &mut event_mask as *mut xinput2::XIEventMask, 1);
             };
         }
 
         let classes : &[*const xinput2::XIAnyClassInfo] =
             unsafe { slice::from_raw_parts(info.classes as *const *const xinput2::XIAnyClassInfo, info.num_classes as usize) };
         for class_ptr in classes {
-            use self::x11_dl::xinput2::*;
+            use self::x11::xinput2::*;
             let class = unsafe { &**class_ptr };
             match class._type {
                 XIKeyClass => {
@@ -326,7 +307,7 @@ impl Context {
                         state: state,
                     });
                     let mask = (1 << XkbNewKeyboardNotify) | (1 << XkbMapNotify) | (1 << XkbStateNotify);
-                    unsafe { (self.xlib.XkbSelectEvents)(self.display, device.0 as u32, mask, mask); };
+                    unsafe { xlib::XkbSelectEvents(self.display, device.0 as u32, mask, mask); };
                 },
                 XIButtonClass => {
                     if real_device {
@@ -356,13 +337,13 @@ impl Context {
     }
 
     fn atom_name(&self, atom: xlib::Atom) -> String {
-        unsafe { CStr::from_ptr((self.xlib.XGetAtomName)(self.display, atom)).to_string_lossy().into_owned() }
+        unsafe { CStr::from_ptr(xlib::XGetAtomName(self.display, atom)).to_string_lossy().into_owned() }
     }
 
     #[allow(non_upper_case_globals)]
     fn queue_event(&self) {
         let storage = self.next_event();
-        use self::x11_dl::xlib::*;
+        use self::x11::xlib::*;
         let event = &XAnyEvent::from(&storage);
         let window = WindowID(event.window);
         let mut buffer = self.buffer.borrow_mut();
@@ -389,8 +370,8 @@ impl Context {
                 if let Some(opcode) = self.xinput2.as_ref().map(|ext| ext.opcode) {
                     if xcookie.extension == opcode {
                         handled = true;
-                        unsafe { (self.xlib.XGetEventData)(self.display, xcookie as *mut xlib::XGenericEventCookie); };
-                        use self::x11_dl::xinput2::*;
+                        unsafe { xlib::XGetEventData(self.display, xcookie as *mut xlib::XGenericEventCookie); };
+                        use self::x11::xinput2::*;
                         match xcookie.evtype {
                             XI_RawMotion => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
@@ -515,7 +496,7 @@ impl Context {
                                 debug!("unhandled XInput2 event type {}", ty);
                             },
                         }
-                        unsafe { (self.xlib.XFreeEventData)(self.display, xcookie as *mut xlib::XGenericEventCookie); };
+                        unsafe { xlib::XFreeEventData(self.display, xcookie as *mut xlib::XGenericEventCookie); };
                     }
                 }
                 if !handled {

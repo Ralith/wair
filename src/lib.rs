@@ -8,7 +8,7 @@ extern crate libc;
 mod common;
 pub use common::*;
 
-#[cfg(feature = "x11")]
+#[cfg(feature = "x11-backend")]
 pub mod x11;
 
 #[cfg(test)]
