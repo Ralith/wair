@@ -9,7 +9,6 @@ use self::xkbcommon::xkb;
 use std::{io, mem, slice, fmt};
 use std::cell::RefCell;
 use std::collections::{VecDeque, HashMap};
-use std::ops::Deref;
 use std::ffi::{CString, CStr};
 use std::ptr;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -202,7 +201,7 @@ impl<'a> EventStream<'a> {
         };
 
         let devices =
-            if let &Some(ref ext) = &result.xinput2 {
+            if result.xinput2.is_some() {
                 // Register for device hotplug events
                 let mask = xinput2::XI_HierarchyChangedMask;
                 unsafe {
@@ -246,7 +245,7 @@ impl<'a> EventStream<'a> {
         };
 
         // Subscribe to non-raw events
-        if let &Some(ref ext) = &self.xinput2 {
+        if self.xinput2.is_some() {
             // Register for device hotplug events
             let mask = xinput2::XI_ButtonPressMask | xinput2::XI_ButtonReleaseMask | xinput2::XI_MotionMask
                 | xinput2::XI_KeyPressMask | xinput2::XI_KeyReleaseMask;
