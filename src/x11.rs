@@ -6,11 +6,10 @@ use self::x11::xlib;
 use self::x11::xinput2;
 use self::xkbcommon::xkb;
 
-use std::{io, mem, slice, fmt};
+use std::{io, mem, slice, fmt, ptr};
 use std::cell::RefCell;
 use std::collections::{VecDeque, HashMap};
 use std::ffi::{CString, CStr};
-use std::ptr;
 use std::os::unix::io::{AsRawFd, RawFd};
 
 use libc::*;

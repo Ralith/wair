@@ -7,6 +7,8 @@ use std::os::unix::io::AsRawFd;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::cell::RefCell;
+use std::path::Path;
+use std::io;
 
 use mio;
 use tokio_core::reactor::{PollEvented, Handle};
@@ -93,30 +95,20 @@ impl<'a> Stream<'a> {
                         None
                     },
                     Some(node) => {
-                        let fd = unsafe { libc::open(&node.as_os_str().as_bytes()[0] as *const u8 as *const c_char,
-                                                     libc::O_RDONLY | libc::O_NONBLOCK) };
-                        if fd == -1 {
-                            debug!("unable to open {}: {}", node.to_string_lossy(), ::std::io::Error::last_os_error().description());
-                            None
-                        } else {
-                            match libevdev::Device::new_from_fd(fd) {
-                                Err(e) => {
-                                    debug!("unable to open {}: {}", device.sysname().to_string_lossy(), e.description());
-                                    None
-                                },
-                                Ok(d) => {
-                                    self.devices.borrow_mut().insert(device.sysname().to_string_lossy().into_owned(), Device(d));
-                                    Some(Event::DeviceAdded { device: DeviceID(device.sysname().to_string_lossy().into_owned()) })
-                                }
-                            }
+                        match self.open_device(device.sysname(), node) {
+                            Err(e) => {
+                                debug!("unable to open {}: {}", node.to_string_lossy(), e.description());
+                                None
+                            },
+                            Ok(()) => Some(Event::DeviceAdded { device: DeviceID(device.sysname().to_string_lossy().into_owned()) })
                         }
                     }
                 }
             },
             Remove => {
-                match self.devices.borrow_mut().remove(&device.sysname().to_string_lossy().into_owned()) {
+                match self.devices.borrow_mut().remove(&*device.sysname().to_string_lossy()) {
                     None => {
-                        warn!("unknown device {} removed", device.sysname().to_string_lossy());
+                        debug!("unknown device {} removed", device.sysname().to_string_lossy());
                         None
                     },
                     Some(_) => Some(Event::DeviceRemoved { device: DeviceID(device.sysname().to_string_lossy().into_owned()) }),
@@ -126,6 +118,21 @@ impl<'a> Stream<'a> {
         }
     }
 
+    fn open_device(&self, sysname: &OsStr, path: &Path) -> io::Result<()> {
+        let fd = unsafe { libc::open(&path.as_os_str().as_bytes()[0] as *const u8 as *const c_char,
+                                     libc::O_RDONLY | libc::O_NONBLOCK) };
+        if fd == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            match libevdev::Device::new_from_fd(fd) {
+                Err(e) => Err(e),
+                Ok(d) => {
+                    self.devices.borrow_mut().insert(sysname.to_string_lossy().into_owned(), Device(d));
+                    Ok(())
+                }
+            }
+        }
+    }
 }
 
 fn from_result<T, E: Error>(x: Result<T, E>) -> Result<T, String> {
