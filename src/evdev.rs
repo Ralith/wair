@@ -63,6 +63,13 @@ impl<'a> mio::Evented for InnerStream<'a> {
 
 struct Device(libevdev::Device);
 
+impl Device {
+    fn new(evdev: libevdev::Device) -> Self {
+        trace!("opened \"{}\"", evdev.get_name().to_string_lossy());
+        Device(evdev)
+    }
+}
+
 impl Drop for Device {
     fn drop(&mut self) {
         unsafe { libc::close(self.0.as_raw_fd()); };
@@ -78,10 +85,15 @@ impl<'a> Stream<'a> {
     pub fn new(ctx: &'a Context, handle: &Handle) -> Result<Self, String> {
         let inner = try!(from_result(InnerStream::new(ctx)));
         let poll = try!(from_result(PollEvented::new(inner, handle)));
-        Ok(Stream {
+
+        let result = Stream {
             io: poll,
             devices: RefCell::new(HashMap::new()),
-        })
+        };
+
+        result.open_existing_devices(&ctx.udev);
+
+        Ok(result)
     }
 
     fn map_event(&self, event: libudev::Event<'a>) -> Option<Event<WindowID, DeviceID>> {
@@ -127,11 +139,27 @@ impl<'a> Stream<'a> {
             match libevdev::Device::new_from_fd(fd) {
                 Err(e) => Err(e),
                 Ok(d) => {
-                    self.devices.borrow_mut().insert(sysname.to_string_lossy().into_owned(), Device(d));
+                    self.devices.borrow_mut().insert(sysname.to_string_lossy().into_owned(), Device::new(d));
                     Ok(())
                 }
             }
         }
+    }
+
+    fn open_existing_devices(&self, udev: &libudev::Context) -> io::Result<()> {
+        let mut enumerator = try!(libudev::Enumerator::new(&udev));
+        try!(enumerator.match_subsystem("input"));
+        let ds = try!(enumerator.scan_devices());
+        for device in ds {
+            match device.devnode() {
+                None => debug!("unable to open {} as it has no devnode", device.sysname().to_string_lossy()),
+                Some(node) => match self.open_device(device.sysname(), node) {
+                    Err(e) => debug!("unable to open {}: {}", node.to_string_lossy(), e.description()),
+                    Ok(()) => (),
+                },
+            }
+        }
+        Ok(())
     }
 }
 
