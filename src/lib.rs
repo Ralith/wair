@@ -6,6 +6,7 @@ extern crate tokio_core;
 extern crate libc;
 extern crate void;
 
+mod platform;
 mod common;
 pub use common::*;
 
