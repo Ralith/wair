@@ -35,14 +35,8 @@ struct Keyboard {
 }
 
 pub struct Context {
-    atoms: Atoms,
     xcb: xcb::base::Connection,
     display: *mut xlib::Display,
-    xinput2: Option<Extension>,
-    buffer: RefCell<VecDeque<Event<WindowID, DeviceID>>>,
-    xkb: xkb::Context,
-    xkb_base_event: u8,
-    keyboards: RefCell<HashMap<DeviceID, Keyboard>>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -67,8 +61,14 @@ struct Atoms {
     device_node: xlib::Atom,
 }
 
-pub struct EventStream {
-    io: PollEvented<Context>,
+pub struct EventStream<'a> {
+    io: PollEvented<&'a mut Context>,
+    atoms: Atoms,
+    xinput2: Option<Extension>,
+    buffer: RefCell<VecDeque<Event<WindowID, DeviceID>>>,
+    xkb: xkb::Context,
+    xkb_base_event: u8,
+    keyboards: RefCell<HashMap<DeviceID, Keyboard>>,
 }
 
 
@@ -88,138 +88,11 @@ impl Context {
         if d.is_null() {
             Err("unable to open display".to_string())
         } else {
-            let atoms = Atoms {
-                wm_protocols: unsafe { xlib::XInternAtom(d, b"WM_PROTOCOLS\0".as_ptr() as *const c_char, 0) },
-                wm_delete_window: unsafe { xlib::XInternAtom(d, b"WM_DELETE_WINDOW\0".as_ptr() as *const c_char, 0) },
-                device_node: unsafe { xlib::XInternAtom(d, b"Device Node\0".as_ptr() as *const c_char, 0) },
-            };
-            let xinput2 = unsafe {
-                let mut result = Extension {
-                    opcode: mem::uninitialized(),
-                    first_event_id: mem::uninitialized(),
-                    first_error_id: mem::uninitialized(),
-                };
-                if 0 != xlib::XQueryExtension(d, b"XInputExtension\0".as_ptr() as *const c_char,
-                                              &mut result.opcode as *mut c_int,
-                                              &mut result.first_event_id as *mut c_int,
-                                              &mut result.first_error_id as *mut c_int
-                                              ) {
-                    let mut major = xinput2::XI_2_Major;
-                    let mut minor = xinput2::XI_2_Minor;
-                    if xinput2::XIQueryVersion(d, &mut major as *mut c_int, &mut minor as *mut c_int)
-                        == xlib::Success as i32 {
-                            Some(result)
-                        } else {
-                            warn!("X server missing support for required XInput2 version {}.{}, has {}.{}",
-                                  xinput2::XI_2_Major, xinput2::XI_2_Minor,
-                                  major, minor);
-                            None
-                        }
-                } else {
-                    warn!("X server missing XInput2 extension");
-                    None
-                }
-            };
             let xcb = unsafe { xcb::base::Connection::new_from_xlib_display(d as *mut x11::xlib::_XDisplay) };
-            let xkb_base_event = unsafe {
-                let mut major_xkb_version = mem::uninitialized();
-                let mut minor_xkb_version = mem::uninitialized();
-                let mut base_event = mem::uninitialized();
-                let mut base_error = mem::uninitialized();
-                let success = xkb::x11::setup_xkb_extension(
-                    &xcb, xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION,
-                    xkb::x11::SetupXkbExtensionFlags::NoFlags,
-                    &mut major_xkb_version, &mut minor_xkb_version,
-                    &mut base_event, &mut base_error);
-                if !success {
-                    panic!("X server missing XKB {}.{}", xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION);
-                }
-                base_event
-            };
-            
-            let result = Context {
-                atoms: atoms,
+            Ok(Context {
                 xcb: xcb,
                 display: d,
-                buffer: RefCell::new(VecDeque::new()),
-                xinput2: xinput2,
-                xkb: xkb::Context::new(0),
-                xkb_base_event: xkb_base_event,
-                keyboards: RefCell::new(HashMap::new()),
-            };
-            result.init();
-            Ok(result)
-        }
-    }
-
-    pub fn flush(&self) {
-        unsafe { xlib::XFlush(self.display); };
-    }
-
-    pub fn new_window(&self, builder: common::WindowBuilder) -> Result<WindowID, String> {
-        let border_width = 0;
-        let handle = unsafe {
-            let screen = xlib::XDefaultScreenOfDisplay(self.display);
-            let root = xlib::XRootWindowOfScreen(screen);
-            let depth = xlib::XDefaultDepthOfScreen(screen);
-            let visual = xlib::XDefaultVisualOfScreen(screen);
-            let mut attrs : xlib::XSetWindowAttributes = mem::uninitialized();
-            attrs.event_mask = xlib::StructureNotifyMask;
-            attrs.background_pixel = xlib::XBlackPixelOfScreen(screen);
-            xlib::XCreateWindow(self.display, root, builder.position.0, builder.position.1, builder.size.0, builder.size.1, border_width, depth,
-                                      xlib::InputOutput as u32, visual, xlib::CWEventMask | xlib::CWBackPixel,
-                                      &mut attrs as *mut xlib::XSetWindowAttributes)
-        };
-
-        // Subscribe to non-raw events
-        if let &Some(ref ext) = &self.xinput2 {
-            // Register for device hotplug events
-            let mask = xinput2::XI_ButtonPressMask | xinput2::XI_ButtonReleaseMask | xinput2::XI_MotionMask
-                | xinput2::XI_KeyPressMask | xinput2::XI_KeyReleaseMask;
-            unsafe {
-                let mut event_mask = xinput2::XIEventMask{
-                    deviceid: xinput2::XIAllMasterDevices,
-                    mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
-                    mask_len: mem::size_of_val(&mask) as c_int,
-                };
-                xinput2::XISelectEvents(self.display, handle,
-                                         &mut event_mask as *mut xinput2::XIEventMask, 1);
-            };
-
-            self.query_device(xinput2::XIAllDevices);
-        }
-
-        // Opt into application handling of window close
-        unsafe { xlib::XSetWMProtocols(self.display, handle,
-                                             mem::transmute::<*const xlib::Atom, *mut xlib::Atom>(&self.atoms.wm_delete_window as *const xlib::Atom), 1); };
-        let window = WindowID(handle);
-        self.window_set_name(window, builder.name);
-        Ok(window)
-    }
-
-    pub fn window_set_name(&self, window: WindowID, name: &str) {
-        let c_name = CString::new(name).unwrap();
-        unsafe { xlib::XStoreName(self.display, window.0, c_name.as_ptr()); };
-    }
-
-    pub fn window_map(&self, window: WindowID) {
-        unsafe { xlib::XMapWindow(self.display, window.0); };
-    }
-
-    pub fn window_unmap(&self, window: WindowID) {
-        unsafe { xlib::XUnmapWindow(self.display, window.0); };
-    }
-
-    pub fn key_sym_name(key: KeySym) -> String {
-        self::xkbcommon::xkb::keysym_get_name(key.0)
-    }
-
-    pub fn key_sym_from_name(name: &str) -> Option<KeySym> {
-        let sym = self::xkbcommon::xkb::keysym_from_name(name, 0);
-        if sym == xkb::keysyms::KEY_NoSymbol {
-            None
-        } else {
-            Some(KeySym(sym))
+            })
         }
     }
 
@@ -236,7 +109,6 @@ impl Context {
     }
 
     fn query_device<'a>(&'a self, device: c_int) -> Vec<xinput2::XIDeviceInfo> {
-        let ext = self.xinput2.as_ref().unwrap();
         unsafe {
             let mut size = mem::uninitialized();
             let info = xinput2::XIQueryDevice(self.display, device, &mut size as *mut c_int);
@@ -248,9 +120,89 @@ impl Context {
         unsafe { xlib::XDefaultRootWindow(self.display) }
     }
 
-    fn init(&self) {
+    fn atom_name(&self, atom: xlib::Atom) -> String {
+        unsafe { CStr::from_ptr(xlib::XGetAtomName(self.display, atom)).to_string_lossy().into_owned() }
+    }
+}
+
+impl<'a> mio::Evented for &'a mut Context {
+    fn register(&self, poll: &mio::Poll, token: mio::Token,
+                interest: mio::Ready, opts: mio::PollOpt) -> io::Result<()> {
+        mio::unix::EventedFd(&self.as_raw_fd()).register(poll, token, interest, opts)
+    }
+
+    fn reregister(&self, poll: &mio::Poll, token: mio::Token,
+                  interest: mio::Ready, opts: mio::PollOpt) -> io::Result<()> {
+        mio::unix::EventedFd(&self.as_raw_fd()).reregister(poll, token, interest, opts)
+    }
+
+    fn deregister(&self, poll: &mio::Poll) -> io::Result<()> {
+        mio::unix::EventedFd(&self.as_raw_fd()).deregister(poll)
+    }
+}
+
+impl<'a> EventStream<'a> {
+    pub fn new(context: &'a mut Context, handle: &Handle) -> io::Result<EventStream<'a>> {
+        let io = try!(PollEvented::new(context, handle));
+        let atoms = Atoms {
+            wm_protocols: unsafe { xlib::XInternAtom(io.get_ref().display, b"WM_PROTOCOLS\0".as_ptr() as *const c_char, 0) },
+            wm_delete_window: unsafe { xlib::XInternAtom(io.get_ref().display, b"WM_DELETE_WINDOW\0".as_ptr() as *const c_char, 0) },
+            device_node: unsafe { xlib::XInternAtom(io.get_ref().display, b"Device Node\0".as_ptr() as *const c_char, 0) },
+        };
+        let xinput2 = unsafe {
+            let mut result = Extension {
+                opcode: mem::uninitialized(),
+                first_event_id: mem::uninitialized(),
+                first_error_id: mem::uninitialized(),
+            };
+            if 0 != xlib::XQueryExtension(io.get_ref().display, b"XInputExtension\0".as_ptr() as *const c_char,
+                                          &mut result.opcode as *mut c_int,
+                                          &mut result.first_event_id as *mut c_int,
+                                          &mut result.first_error_id as *mut c_int
+                                          ) {
+                let mut major = xinput2::XI_2_Major;
+                let mut minor = xinput2::XI_2_Minor;
+                if xinput2::XIQueryVersion(io.get_ref().display, &mut major as *mut c_int, &mut minor as *mut c_int)
+                    == xlib::Success as i32 {
+                        Some(result)
+                    } else {
+                        warn!("X server missing support for required XInput2 version {}.{}, has {}.{}",
+                              xinput2::XI_2_Major, xinput2::XI_2_Minor,
+                              major, minor);
+                        None
+                    }
+            } else {
+                warn!("X server missing XInput2 extension");
+                None
+            }
+        };
+        let xkb_base_event = unsafe {
+            let mut major_xkb_version = mem::uninitialized();
+            let mut minor_xkb_version = mem::uninitialized();
+            let mut base_event = mem::uninitialized();
+            let mut base_error = mem::uninitialized();
+            let success = xkb::x11::setup_xkb_extension(
+                &io.get_ref().xcb, xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION,
+                xkb::x11::SetupXkbExtensionFlags::NoFlags,
+                &mut major_xkb_version, &mut minor_xkb_version,
+                &mut base_event, &mut base_error);
+            if !success {
+                panic!("X server missing XKB {}.{}", xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION);
+            }
+            base_event
+        };
+        let result = EventStream {
+            io: io,
+            atoms: atoms,
+            buffer: RefCell::new(VecDeque::new()),
+            xinput2: xinput2,
+            xkb: xkb::Context::new(0),
+            xkb_base_event: xkb_base_event,
+            keyboards: RefCell::new(HashMap::new()),
+        };
+
         let devices =
-            if let &Some(ref ext) = &self.xinput2 {
+            if let &Some(ref ext) = &result.xinput2 {
                 // Register for device hotplug events
                 let mask = xinput2::XI_HierarchyChangedMask;
                 unsafe {
@@ -259,17 +211,94 @@ impl Context {
                         mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
                         mask_len: mem::size_of_val(&mask) as c_int,
                     };
-                    xinput2::XISelectEvents(self.display, self.default_root(),
-                                             &mut event_mask as *mut xinput2::XIEventMask, 1);
+                    xinput2::XISelectEvents(result.context().display, result.context().default_root(),
+                                            &mut event_mask as *mut xinput2::XIEventMask, 1);
                 };
 
-                self.query_device(xinput2::XIAllDevices)
+                result.context().query_device(xinput2::XIAllDevices)
             } else {
                 Vec::new()
             };
         for device in devices {
-            self.open_device(&device);
+            result.open_device(&device);
         }
+
+        Ok(result)
+    }
+
+    pub fn flush(&self) {
+        unsafe { xlib::XFlush(self.context().display); };
+    }
+
+    pub fn new_window(&self, builder: common::WindowBuilder) -> Result<WindowID, String> {
+        let border_width = 0;
+        let handle = unsafe {
+            let screen = xlib::XDefaultScreenOfDisplay(self.context().display);
+            let root = xlib::XRootWindowOfScreen(screen);
+            let depth = xlib::XDefaultDepthOfScreen(screen);
+            let visual = xlib::XDefaultVisualOfScreen(screen);
+            let mut attrs : xlib::XSetWindowAttributes = mem::uninitialized();
+            attrs.event_mask = xlib::StructureNotifyMask;
+            attrs.background_pixel = xlib::XBlackPixelOfScreen(screen);
+            xlib::XCreateWindow(self.context().display, root, builder.position.0, builder.position.1, builder.size.0, builder.size.1, border_width, depth,
+                                xlib::InputOutput as u32, visual, xlib::CWEventMask | xlib::CWBackPixel,
+                                &mut attrs as *mut xlib::XSetWindowAttributes)
+        };
+
+        // Subscribe to non-raw events
+        if let &Some(ref ext) = &self.xinput2 {
+            // Register for device hotplug events
+            let mask = xinput2::XI_ButtonPressMask | xinput2::XI_ButtonReleaseMask | xinput2::XI_MotionMask
+                | xinput2::XI_KeyPressMask | xinput2::XI_KeyReleaseMask;
+            unsafe {
+                let mut event_mask = xinput2::XIEventMask{
+                    deviceid: xinput2::XIAllMasterDevices,
+                    mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
+                    mask_len: mem::size_of_val(&mask) as c_int,
+                };
+                xinput2::XISelectEvents(self.context().display, handle,
+                                        &mut event_mask as *mut xinput2::XIEventMask, 1);
+            };
+
+            self.context().query_device(xinput2::XIAllDevices);
+        }
+
+        // Opt into application handling of window close
+        unsafe { xlib::XSetWMProtocols(self.context().display, handle,
+                                       mem::transmute::<*const xlib::Atom, *mut xlib::Atom>(&self.atoms.wm_delete_window as *const xlib::Atom), 1); };
+        let window = WindowID(handle);
+        self.window_set_name(window, builder.name);
+        Ok(window)
+    }
+
+    pub fn window_set_name(&self, window: WindowID, name: &str) {
+        let c_name = CString::new(name).unwrap();
+        unsafe { xlib::XStoreName(self.context().display, window.0, c_name.as_ptr()); };
+    }
+
+    pub fn window_map(&self, window: WindowID) {
+        unsafe { xlib::XMapWindow(self.context().display, window.0); };
+    }
+
+    pub fn window_unmap(&self, window: WindowID) {
+        unsafe { xlib::XUnmapWindow(self.context().display, window.0); };
+    }
+
+    pub fn key_sym_name(key: KeySym) -> String {
+        self::xkbcommon::xkb::keysym_get_name(key.0)
+    }
+
+    pub fn key_sym_from_name(name: &str) -> Option<KeySym> {
+        let sym = self::xkbcommon::xkb::keysym_from_name(name, 0);
+        if sym == xkb::keysyms::KEY_NoSymbol {
+            None
+        } else {
+            Some(KeySym(sym))
+        }
+    }
+
+    fn context(&self) -> &Context {
+        self.io.get_ref()
     }
 
     #[allow(non_upper_case_globals)]
@@ -289,7 +318,7 @@ impl Context {
                     mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
                     mask_len: mem::size_of_val(&mask) as c_int,
                 };
-                xinput2::XISelectEvents(self.display, self.default_root(), &mut event_mask as *mut xinput2::XIEventMask, 1);
+                xinput2::XISelectEvents(self.context().display, self.context().default_root(), &mut event_mask as *mut xinput2::XIEventMask, 1);
             };
         }
 
@@ -300,14 +329,14 @@ impl Context {
             let class = unsafe { &**class_ptr };
             match class._type {
                 XIKeyClass => {
-                    let map = xkb::x11::keymap_new_from_device(&self.xkb, &self.xcb, device.0, 0);
-                    let state = xkb::x11::state_new_from_device(&map, &self.xcb, device.0);
+                    let map = xkb::x11::keymap_new_from_device(&self.xkb, &self.context().xcb, device.0, 0);
+                    let state = xkb::x11::state_new_from_device(&map, &self.context().xcb, device.0);
                     self.keyboards.borrow_mut().insert(device, Keyboard {
                         map: map,
                         state: state,
                     });
                     let mask = (1 << XkbNewKeyboardNotify) | (1 << XkbMapNotify) | (1 << XkbStateNotify);
-                    unsafe { xlib::XkbSelectEvents(self.display, device.0 as u32, mask, mask); };
+                    unsafe { xlib::XkbSelectEvents(self.context().display, device.0 as u32, mask, mask); };
                 },
                 XIButtonClass => {
                     if real_device {
@@ -336,13 +365,9 @@ impl Context {
         }
     }
 
-    fn atom_name(&self, atom: xlib::Atom) -> String {
-        unsafe { CStr::from_ptr(xlib::XGetAtomName(self.display, atom)).to_string_lossy().into_owned() }
-    }
-
     #[allow(non_upper_case_globals)]
     fn queue_event(&self) {
-        let storage = self.next_event();
+        let storage = self.context().next_event();
         use self::x11::xlib::*;
         let event = &XAnyEvent::from(&storage);
         let window = WindowID(event.window);
@@ -358,10 +383,10 @@ impl Context {
                     if atom == self.atoms.wm_delete_window {
                         buffer.push_back(Event::Quit(window));
                     } else {
-                        debug!("unhandled WM_PROTOCOLS message {}", self.atom_name(atom));
+                        debug!("unhandled WM_PROTOCOLS message {}", self.context().atom_name(atom));
                     }
                 } else {
-                    debug!("unhandled client message type {}", self.atom_name(xclient.message_type));
+                    debug!("unhandled client message type {}", self.context().atom_name(xclient.message_type));
                 }
             },
             GenericEvent => {
@@ -370,7 +395,7 @@ impl Context {
                 if let Some(opcode) = self.xinput2.as_ref().map(|ext| ext.opcode) {
                     if xcookie.extension == opcode {
                         handled = true;
-                        unsafe { xlib::XGetEventData(self.display, xcookie as *mut xlib::XGenericEventCookie); };
+                        unsafe { xlib::XGetEventData(self.context().display, xcookie as *mut xlib::XGenericEventCookie); };
                         use self::x11::xinput2::*;
                         match xcookie.evtype {
                             XI_RawMotion => {
@@ -477,7 +502,7 @@ impl Context {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIHierarchyEvent>(xcookie.data) };
                                 for info in unsafe { slice::from_raw_parts(evt.info, evt.num_info as usize) } {
                                     if 0 != info.flags & (XISlaveAdded | XIMasterAdded) {
-                                        for di in self.query_device(info.deviceid) {
+                                        for di in self.context().query_device(info.deviceid) {
                                             buffer.push_back(Event::DeviceChange {
                                                 device: DeviceID(di.deviceid),
                                                 connected: true,
@@ -496,7 +521,7 @@ impl Context {
                                 debug!("unhandled XInput2 event type {}", ty);
                             },
                         }
-                        unsafe { xlib::XFreeEventData(self.display, xcookie as *mut xlib::XGenericEventCookie); };
+                        unsafe { xlib::XFreeEventData(self.context().display, xcookie as *mut xlib::XGenericEventCookie); };
                     }
                 }
                 if !handled {
@@ -509,12 +534,12 @@ impl Context {
                     let mut kb = keyboards.get_mut(&DeviceID(xkb_event.device as i32)).unwrap();
                     match xkb_event.xkb_type {
                         XkbNewKeyboardNotify => {
-                            kb.map = self::xkbcommon::xkb::x11::keymap_new_from_device(&self.xkb, &self.xcb, xkb_event.device as i32, 0);
-                            kb.state = self::xkbcommon::xkb::x11::state_new_from_device(&kb.map, &self.xcb, xkb_event.device as i32);
+                            kb.map = self::xkbcommon::xkb::x11::keymap_new_from_device(&self.xkb, &self.context().xcb, xkb_event.device as i32, 0);
+                            kb.state = self::xkbcommon::xkb::x11::state_new_from_device(&kb.map, &self.context().xcb, xkb_event.device as i32);
                         },
                         XkbMapNotify => {
-                            kb.map = self::xkbcommon::xkb::x11::keymap_new_from_device(&self.xkb, &self.xcb, xkb_event.device as i32, 0);
-                            kb.state = self::xkbcommon::xkb::x11::state_new_from_device(&kb.map, &self.xcb, xkb_event.device as i32);
+                            kb.map = self::xkbcommon::xkb::x11::keymap_new_from_device(&self.xkb, &self.context().xcb, xkb_event.device as i32, 0);
+                            kb.state = self::xkbcommon::xkb::x11::state_new_from_device(&kb.map, &self.context().xcb, xkb_event.device as i32);
                         },
                         XkbStateNotify => {
                             let state = unsafe { mem::transmute::<&XEvent, &XkbStateNotifyEvent>(&storage) };
@@ -533,35 +558,7 @@ impl Context {
     }
 }
 
-impl mio::Evented for Context {
-    fn register(&self, poll: &mio::Poll, token: mio::Token,
-                interest: mio::Ready, opts: mio::PollOpt) -> io::Result<()> {
-        mio::unix::EventedFd(&self.as_raw_fd()).register(poll, token, interest, opts)
-    }
-
-    fn reregister(&self, poll: &mio::Poll, token: mio::Token,
-                  interest: mio::Ready, opts: mio::PollOpt) -> io::Result<()> {
-        mio::unix::EventedFd(&self.as_raw_fd()).reregister(poll, token, interest, opts)
-    }
-
-    fn deregister(&self, poll: &mio::Poll) -> io::Result<()> {
-        mio::unix::EventedFd(&self.as_raw_fd()).deregister(poll)
-    }
-}
-
-impl EventStream {
-    pub fn new(context: Context, handle: &Handle) -> io::Result<EventStream> {
-        PollEvented::new(context, handle).map(|x| EventStream { io: x })
-    }
-}
-
-impl Deref for EventStream {
-    type Target = Context;
-
-    fn deref(&self) -> &Context { self.io.get_ref() }
-}
-
-impl<'a> futures::stream::Stream for &'a EventStream {
+impl<'a, 'b> futures::stream::Stream for &'a EventStream<'b> {
     type Item = Event<WindowID, DeviceID>;
     type Error = ();
 
@@ -571,7 +568,7 @@ impl<'a> futures::stream::Stream for &'a EventStream {
             return Ok(futures::Async::NotReady);
         }
 
-        while self.pending() != 0 {
+        while self.context().pending() != 0 {
             self.queue_event();
         }
 
