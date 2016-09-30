@@ -1,4 +1,5 @@
 use std::fmt;
+use std::hash::Hash;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct AxisID(pub i32);
@@ -24,28 +25,28 @@ impl fmt::Debug for KeySym {
     }
 }
 
-// TODO: Factor into window/device inputs
 #[derive(Debug)]
 pub enum Event<W : WindowID, D : DeviceID> {
     Map(W),
     Unmap(W),
     Quit(W),
     RawMotion { device: D, axis: AxisID, value: f64 },
-    Motion { device: D, axis: AxisID, value: f64 },
-    PointerMotion { device: D, pos: (f64, f64) },
+    Motion { window: W, device: D, axis: AxisID, value: f64 },
+    PointerMotion { window: W, device: D, pos: (f64, f64) },
     RawButtonPress { device: D, button: ButtonID },
     RawButtonRelease { device: D, button: ButtonID },
-    ButtonPress { device: D, button: ButtonID },
-    ButtonRelease { device: D, button: ButtonID },
+    ButtonPress { window: W, device: D, button: ButtonID },
+    ButtonRelease { window: W, device: D, button: ButtonID },
     RawKeyPress { device: D, scan_code: ScanCode, key_sym: KeySym, text: String },
     RawKeyRelease { device: D, scan_code: ScanCode, key_sym: KeySym },
-    KeyPress { device: D, scan_code: ScanCode, key_sym: KeySym, text: String },
-    KeyRelease { device: D, scan_code: ScanCode, key_sym: KeySym },
-    DeviceChange { device: D, connected: bool },
+    KeyPress { window: W, device: D, scan_code: ScanCode, key_sym: KeySym, text: String },
+    KeyRelease { window: W, device: D, scan_code: ScanCode, key_sym: KeySym },
+    DeviceAdded { device: D },
+    DeviceRemoved { device: D },
 }
 
-pub trait WindowID: fmt::Debug + Copy {}
-pub trait DeviceID: fmt::Debug + Copy {}
+pub trait WindowID: fmt::Debug + Copy + Hash + Eq {}
+pub trait DeviceID: fmt::Debug + Copy + Hash + Eq {}
 
 pub struct WindowBuilder<'a> {
     pub name: &'a str,

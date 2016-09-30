@@ -450,6 +450,7 @@ impl<'a> EventStream<'a> {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
                                 let kb = &keyboards[&DeviceID(evt.deviceid)];
                                 buffer.push_back(Event::KeyPress {
+                                    window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
                                     scan_code: ScanCode(evt.detail as u32),
                                     key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
@@ -460,6 +461,7 @@ impl<'a> EventStream<'a> {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
                                 let kb = &keyboards[&DeviceID(evt.deviceid)];
                                 buffer.push_back(Event::KeyRelease {
+                                    window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
                                     key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
                                     scan_code: ScanCode(evt.detail as u32),
@@ -468,6 +470,7 @@ impl<'a> EventStream<'a> {
                             XI_ButtonPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
                                 buffer.push_back(Event::ButtonPress {
+                                    window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
                                     button: ButtonID(evt.detail),
                                 });
@@ -475,6 +478,7 @@ impl<'a> EventStream<'a> {
                             XI_ButtonRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
                                 buffer.push_back(Event::ButtonRelease {
+                                    window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
                                     button: ButtonID(evt.detail),
                                 });
@@ -486,6 +490,7 @@ impl<'a> EventStream<'a> {
                                 for i in 0..evt.valuators.mask_len*8 {
                                     if XIMaskIsSet(mask, i) {
                                         buffer.push_back(Event::Motion {
+                                            window: WindowID(evt.event),
                                             device: DeviceID(evt.deviceid),
                                             axis: AxisID(i),
                                             value: unsafe { *value }
@@ -494,6 +499,7 @@ impl<'a> EventStream<'a> {
                                     }
                                 };
                                 buffer.push_back(Event::PointerMotion {
+                                    window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
                                     pos: (evt.event_x, evt.event_y),
                                 });
@@ -503,16 +509,14 @@ impl<'a> EventStream<'a> {
                                 for info in unsafe { slice::from_raw_parts(evt.info, evt.num_info as usize) } {
                                     if 0 != info.flags & (XISlaveAdded | XIMasterAdded) {
                                         for di in self.context().query_device(info.deviceid) {
-                                            buffer.push_back(Event::DeviceChange {
+                                            buffer.push_back(Event::DeviceAdded {
                                                 device: DeviceID(di.deviceid),
-                                                connected: true,
                                             });
                                             self.open_device(&di);
                                         }
                                     } else if 0 != info.flags & (XISlaveRemoved | XIMasterRemoved) {
-                                        buffer.push_back(Event::DeviceChange {
+                                        buffer.push_back(Event::DeviceRemoved {
                                             device: DeviceID(info.deviceid),
-                                            connected: false,
                                         });
                                     }
                                 }
