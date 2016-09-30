@@ -25,7 +25,7 @@ impl fmt::Debug for KeySym {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Event<W : WindowID, D : DeviceID> {
     Map(W),
     Unmap(W),
@@ -45,8 +45,32 @@ pub enum Event<W : WindowID, D : DeviceID> {
     DeviceRemoved { device: D },
 }
 
-pub trait WindowID: fmt::Debug + Copy + Hash + Eq {}
-pub trait DeviceID: fmt::Debug + Copy + Hash + Eq {}
+impl<W: WindowID, D: DeviceID> Event<W, D> {
+    pub fn map<T: WindowID, U: DeviceID, F: Fn(W) -> T, G: Fn(D) -> U>(self, f: F, g: G) -> Event<T, U> {
+        use Event::*;
+        match self {
+            Map(x) => Map(f(x)),
+            Unmap(x) => Unmap(f(x)),
+            Quit(x) => Quit(f(x)),
+            RawMotion { device: d, axis: a, value: v } => RawMotion { device: g(d), axis: a, value: v },
+            Motion { window: w, device: d, axis: a, value: v } => Motion { window: f(w), device: g(d), axis: a, value: v},
+            PointerMotion { window: w, device: d, pos: p } => PointerMotion { window: f(w), device: g(d), pos: p},
+            RawButtonPress { device: d, button: b } => RawButtonPress { device: g(d), button: b },
+            RawButtonRelease { device: d, button: b } => RawButtonRelease { device: g(d), button: b },
+            ButtonPress { window: w, device: d, button: b } => ButtonPress { window: f(w), device: g(d), button: b },
+            ButtonRelease { window: w, device: d, button: b } => ButtonRelease { window: f(w), device: g(d), button: b },
+            RawKeyPress { device: d, key_sym: b, scan_code: c, text: s } => RawKeyPress { device: g(d), key_sym: b, scan_code: c, text: s },
+            RawKeyRelease { device: d, key_sym: b, scan_code: c } => RawKeyRelease { device: g(d), key_sym: b, scan_code: c },
+            KeyPress { window: w, device: d, key_sym: b, scan_code: c, text: s } => KeyPress { window: f(w), device: g(d), key_sym: b, scan_code: c, text: s },
+            KeyRelease { window: w, device: d, key_sym: b, scan_code: c } => KeyRelease { window: f(w), device: g(d), key_sym: b, scan_code: c },
+            DeviceAdded { device: d } => DeviceAdded { device: g(d) },
+            DeviceRemoved { device: d } => DeviceRemoved { device: g(d) },
+        }
+    }
+}
+
+pub trait WindowID: fmt::Debug + Clone + Hash + Eq {}
+pub trait DeviceID: fmt::Debug + Clone + Hash + Eq {}
 
 pub struct WindowBuilder<'a> {
     pub name: &'a str,

@@ -4,12 +4,16 @@ extern crate futures;
 extern crate mio;
 extern crate tokio_core;
 extern crate libc;
+extern crate void;
 
 mod common;
 pub use common::*;
 
 #[cfg(feature = "x11-backend")]
 pub mod x11;
+
+#[cfg(feature = "evdev-backend")]
+pub mod evdev;
 
 #[cfg(test)]
 mod tests {
