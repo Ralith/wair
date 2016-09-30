@@ -60,7 +60,7 @@ struct Atoms {
     device_node: xlib::Atom,
 }
 
-pub struct EventStream<'a> {
+pub struct Stream<'a> {
     io: PollEvented<&'a mut Context>,
     atoms: Atoms,
     xinput2: Option<Extension>,
@@ -140,8 +140,8 @@ impl<'a> mio::Evented for &'a mut Context {
     }
 }
 
-impl<'a> EventStream<'a> {
-    pub fn new(context: &'a mut Context, handle: &Handle) -> io::Result<EventStream<'a>> {
+impl<'a> Stream<'a> {
+    pub fn new(context: &'a mut Context, handle: &Handle) -> io::Result<Stream<'a>> {
         let io = try!(PollEvented::new(context, handle));
         let atoms = Atoms {
             wm_protocols: unsafe { xlib::XInternAtom(io.get_ref().display, b"WM_PROTOCOLS\0".as_ptr() as *const c_char, 0) },
@@ -190,7 +190,7 @@ impl<'a> EventStream<'a> {
             }
             base_event
         };
-        let result = EventStream {
+        let result = Stream {
             io: io,
             atoms: atoms,
             buffer: RefCell::new(VecDeque::new()),
@@ -561,7 +561,7 @@ impl<'a> EventStream<'a> {
     }
 }
 
-impl<'a, 'b> futures::stream::Stream for &'a EventStream<'b> {
+impl<'a, 'b> futures::stream::Stream for &'a Stream<'b> {
     type Item = Event<WindowID, DeviceID>;
     type Error = ();
 

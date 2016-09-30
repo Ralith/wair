@@ -22,11 +22,11 @@ fn handle_event<W: WindowID, D: DeviceID>(e: Event<W, D>) -> Result<(), ()> {
     match e {
         Event::Quit(_) => Err(()),
         Event::RawKeyPress { key_sym: sym, .. } => {
-            println!("sym: {}", x11::EventStream::key_sym_name(sym));
+            println!("sym: {}", x11::Stream::key_sym_name(sym));
             Ok(())
         },
         Event::KeyPress { key_sym: sym, .. } => {
-            println!("sym: {}", x11::EventStream::key_sym_name(sym));
+            println!("sym: {}", x11::Stream::key_sym_name(sym));
             Ok(())
         },
         _ => Ok(()),
@@ -40,7 +40,7 @@ fn main() {
     let handle = l.handle();
 
     let mut x_context = x11::Context::new().unwrap();
-    let x_stream = x11::EventStream::new(&mut x_context, &handle).unwrap();
+    let x_stream = x11::Stream::new(&mut x_context, &handle).unwrap();
     let window = x_stream.new_window(WindowBuilder::new().name("wair input demo")).unwrap();
     x_stream.window_map(window);
     x_stream.flush();
