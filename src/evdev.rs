@@ -1,13 +1,9 @@
-extern crate libudev;
-
 use std::error::Error;
-use std::ffi::{OsStr, OsString};
-use std::os::unix::ffi::OsStrExt;
+use std::ffi::{CStr, CString, OsStr};
 use std::os::unix::io::AsRawFd;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::cell::RefCell;
-use std::path::Path;
 use std::io;
 use std::borrow::Cow;
 
@@ -16,50 +12,41 @@ use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 use void::Void;
 use libc;
-use libc::c_char;
 
 use common;
 use common::{Event, AxisID, ButtonID};
 
+use super::platform::libudev as udev;
 use super::platform::libevdev;
 use super::platform::linux_event_codes as codes;
 
 pub struct Context {
-    udev: libudev::Context,
+    udev: udev::Monitor,
 }
 
 impl Context {
-    pub fn new() -> Result<Self, String> {
-        from_result(libudev::Context::new()).map(|x| Context { udev: x })
+    pub fn new() -> io::Result<Context> {
+        let udev = try!(udev::Context::new());
+        let mut monitor = try!(udev::Monitor::new(udev));
+        try!(monitor.filter_add_match_subsystem(CStr::from_bytes_with_nul(b"input\0").unwrap()));
+        monitor.enable_receiving();
+        Ok(Context { udev: monitor })
     }
 }
 
-struct UdevStream<'a> {
-    monitor: RefCell<libudev::MonitorSocket<'a>>,
-}
-
-impl<'a> UdevStream<'a> {
-    fn new(ctx: &'a Context) -> libudev::Result<Self> {
-        let mut monitor = try!(libudev::Monitor::new(&ctx.udev));
-        try!(monitor.match_subsystem("input"));
-        let sock = try!(monitor.listen());
-        Ok(UdevStream { monitor: RefCell::new(sock) })
-    }
-}
-
-impl<'a> mio::Evented for UdevStream<'a> {
+impl mio::Evented for Context {
     fn register(&self, poll: &mio::Poll, token: mio::Token,
                 interest: mio::Ready, opts: mio::PollOpt) -> ::std::io::Result<()> {
-        mio::unix::EventedFd(&self.monitor.borrow().as_raw_fd()).register(poll, token, interest, opts)
+        mio::unix::EventedFd(&self.udev.as_raw_fd()).register(poll, token, interest, opts)
     }
 
     fn reregister(&self, poll: &mio::Poll, token: mio::Token,
                   interest: mio::Ready, opts: mio::PollOpt) -> ::std::io::Result<()> {
-        mio::unix::EventedFd(&self.monitor.borrow().as_raw_fd()).reregister(poll, token, interest, opts)
+        mio::unix::EventedFd(&self.udev.as_raw_fd()).reregister(poll, token, interest, opts)
     }
 
     fn deregister(&self, poll: &mio::Poll) -> ::std::io::Result<()> {
-        mio::unix::EventedFd(&self.monitor.borrow().as_raw_fd()).deregister(poll)
+        mio::unix::EventedFd(&self.udev.as_raw_fd()).deregister(poll)
     }
 }
 
@@ -94,16 +81,16 @@ impl mio::Evented for Device {
     }
 }
 
-pub struct Stream<'a> {
-    udev: PollEvented<UdevStream<'a>>,
+pub struct Stream {
+    udev: PollEvented<Context>,
     tokio: Handle,
-    devices: RefCell<HashMap<OsString, PollEvented<Device>>>,
+    devices: RefCell<HashMap<CString, PollEvented<Device>>>,
     buffer: RefCell<VecDeque<Event<WindowID, DeviceID>>>,
 }
 
-impl<'a> Stream<'a> {
-    pub fn new(ctx: &'a Context, handle: &Handle) -> Result<Self, String> {
-        let inner = try!(from_result(UdevStream::new(ctx)));
+impl Stream {
+    pub fn new(handle: &Handle) -> Result<Self, String> {
+        let inner = try!(from_result(Context::new()));
         let poll = try!(from_result(PollEvented::new(inner, handle)));
 
         let result = Stream {
@@ -113,16 +100,14 @@ impl<'a> Stream<'a> {
             buffer: RefCell::new(VecDeque::new()),
         };
 
-        try!(result.open_existing_devices(&ctx.udev).map_err(|e| e.description().to_string()));
+        try!(result.open_existing_devices(&result.udev.get_ref().udev).map_err(|e| e.description().to_string()));
 
         Ok(result)
     }
 
-    fn map_udev_event(&self, event: libudev::Event<'a>) -> Option<Event<WindowID, DeviceID>> {
-        let device = event.device();
-        use self::libudev::EventType::*;
-        match event.event_type() {
-            Add => {
+    fn map_udev_event(&self, device: udev::Device) -> Option<Event<WindowID, DeviceID>> {
+        match device.action().to_bytes() {
+            b"add" => {
                 match device.devnode() {
                     None => {
                         debug!("unable to open {} as it has no devnode", device.sysname().to_string_lossy());
@@ -139,7 +124,7 @@ impl<'a> Stream<'a> {
                     }
                 }
             },
-            Remove => {
+            b"remove" => {
                 match self.devices.borrow_mut().remove(device.sysname()) {
                     None => {
                         debug!("unknown device {} removed", device.sysname().to_string_lossy());
@@ -152,9 +137,8 @@ impl<'a> Stream<'a> {
         }
     }
 
-    fn open_device(&self, sysname: &OsStr, path: &Path) -> io::Result<()> {
-        let fd = unsafe { libc::open(&path.as_os_str().as_bytes()[0] as *const u8 as *const c_char,
-                                     libc::O_RDONLY | libc::O_NONBLOCK) };
+    fn open_device(&self, sysname: &CStr, syspath: &CStr) -> io::Result<()> {
+        let fd = unsafe { libc::open(syspath.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK) };
         if fd == -1 {
             Err(io::Error::last_os_error())
         } else {
@@ -173,11 +157,10 @@ impl<'a> Stream<'a> {
         }
     }
 
-    fn open_existing_devices(&self, udev: &libudev::Context) -> io::Result<()> {
-        let mut enumerator = try!(libudev::Enumerator::new(&udev));
-        try!(enumerator.match_subsystem("input"));
-        let ds = try!(enumerator.scan_devices());
-        for device in ds {
+    fn open_existing_devices(&self, udev: &udev::Context) -> io::Result<()> {
+        let mut enumerate = try!(udev::Enumerate::new(&udev));
+        try!(enumerate.add_match_subsystem(CStr::from_bytes_with_nul(b"input\0").unwrap()));
+        for device in enumerate {
             match device.devnode() {
                 None => debug!("unable to open {} as it has no devnode", device.sysname().to_string_lossy()),
                 Some(node) => match self.open_device(device.sysname(), node) {
@@ -189,7 +172,7 @@ impl<'a> Stream<'a> {
         Ok(())
     }
 
-    fn map_device_event(&self, id: &OsStr, event: libevdev::InputEvent) -> Option<Event<WindowID, DeviceID>> {
+    fn map_device_event(&self, id: &CStr, event: libevdev::InputEvent) -> Option<Event<WindowID, DeviceID>> {
         match event.type_ {
             codes::EV_SYN => None,
             codes::EV_KEY => match event.value {
@@ -231,7 +214,7 @@ impl<'a> Stream<'a> {
         }
     }
 
-    fn poll_device(&self, id: &OsStr, device: &mut Device) {
+    fn poll_device(&self, id: &CStr, device: &mut Device) {
         use super::platform::libevdev::ReadStatus::*;
         let mut buffer = self.buffer.borrow_mut();
         let mut flag = libevdev::READ_FLAG_NORMAL;
@@ -259,7 +242,7 @@ fn from_result<T, E: Error>(x: Result<T, E>) -> Result<T, String> {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct DeviceID(OsString);
+pub struct DeviceID(CString);
 
 impl common::DeviceID for DeviceID {}
 
@@ -275,7 +258,7 @@ impl Eq for WindowID {}
 
 impl common::WindowID for WindowID {}
 
-impl<'a, 'b> futures::stream::Stream for &'a Stream<'b> {
+impl<'a> futures::stream::Stream for &'a Stream {
     type Item = Event<WindowID, DeviceID>;
     type Error = ();
 
@@ -291,9 +274,14 @@ impl<'a, 'b> futures::stream::Stream for &'a Stream<'b> {
 
         let mut buffer = self.buffer.borrow_mut();
 
-        while let Some(event) = self.udev.get_ref().monitor.borrow_mut().receive_event() {
-            if let Some(e) = self.map_udev_event(event) {
-                buffer.push_back(e);
+        loop {
+            match self.udev.get_ref().udev.receive_device() {
+                None => break,
+                Some(dev) => {
+                    if let Some(e) = self.map_udev_event(dev) {
+                        buffer.push_back(e);
+                    }
+                }
             }
         }
 

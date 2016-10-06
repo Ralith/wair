@@ -4,4 +4,6 @@ mod libevdev_sys;
 pub mod libevdev;
 #[cfg(feature = "evdev-backend")]
 pub mod linux_event_codes;
+#[cfg(feature = "evdev-backend")]
+pub mod libudev;
 

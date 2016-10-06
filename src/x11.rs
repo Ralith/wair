@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::{VecDeque, HashMap};
 use std::ffi::{CString, CStr};
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::error::Error;
 
 use libc::*;
 
@@ -59,8 +60,8 @@ struct Atoms {
     device_node: xlib::Atom,
 }
 
-pub struct Stream<'a> {
-    io: PollEvented<&'a mut Context>,
+pub struct Stream {
+    io: PollEvented<Context>,
     atoms: Atoms,
     xinput2: Option<Extension>,
     buffer: RefCell<VecDeque<Event<WindowID, DeviceID>>>,
@@ -80,7 +81,7 @@ impl AsRawFd for Context {
 }
 
 impl Context {
-    pub fn new() -> Result<Context, String> {
+    fn new() -> Result<Context, String> {
         unsafe { xlib::XInitThreads(); };
         let d = unsafe { xlib::XOpenDisplay(ptr::null()) };
         if d.is_null() {
@@ -123,7 +124,7 @@ impl Context {
     }
 }
 
-impl<'a> mio::Evented for &'a mut Context {
+impl mio::Evented for Context {
     fn register(&self, poll: &mio::Poll, token: mio::Token,
                 interest: mio::Ready, opts: mio::PollOpt) -> io::Result<()> {
         mio::unix::EventedFd(&self.as_raw_fd()).register(poll, token, interest, opts)
@@ -139,8 +140,13 @@ impl<'a> mio::Evented for &'a mut Context {
     }
 }
 
-impl<'a> Stream<'a> {
-    pub fn new(context: &'a mut Context, handle: &Handle) -> io::Result<Stream<'a>> {
+impl Stream {
+    pub fn new(handle: &Handle) -> Result<Stream, String> {
+        let context = try!(Context::new());
+        Stream::new_(context, handle).map_err(|e| e.description().to_string())
+    }
+
+    fn new_(context: Context, handle: &Handle) -> io::Result<Stream> {
         let io = try!(PollEvented::new(context, handle));
         let atoms = Atoms {
             wm_protocols: unsafe { xlib::XInternAtom(io.get_ref().display, b"WM_PROTOCOLS\0".as_ptr() as *const c_char, 0) },
@@ -560,7 +566,7 @@ impl<'a> Stream<'a> {
     }
 }
 
-impl<'a, 'b> futures::stream::Stream for &'a Stream<'b> {
+impl<'a> futures::stream::Stream for &'a Stream {
     type Item = Event<WindowID, DeviceID>;
     type Error = ();
 
