@@ -343,9 +343,9 @@ impl<'a> Stream<'a> {
                         for i in 0..button_info.num_buttons {
                             self.buffer.borrow_mut().push_back(
                                 if XIMaskIsSet(mask, i) {
-                                    Event::RawButtonPress { device: device, button: ButtonID(i) }
+                                    Event::RawButtonPress { device: device, button: ButtonID(i as u32) }
                                 } else {
-                                    Event::RawButtonRelease { device: device, button: ButtonID(i) }
+                                    Event::RawButtonRelease { device: device, button: ButtonID(i as u32) }
                                 });
                         }
                     }
@@ -353,7 +353,7 @@ impl<'a> Stream<'a> {
                 XIValuatorClass => {
                     if real_device {
                         let axis_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIValuatorClassInfo>(class) };
-                        self.buffer.borrow_mut().push_back(Event::RawMotion{ device: device, axis: AxisID(axis_info.number), value: axis_info.value });
+                        self.buffer.borrow_mut().push_back(Event::RawMotion{ device: device, axis: AxisID(axis_info.number as u32), value: axis_info.value });
                     }
                 },
                 ty => {
@@ -404,7 +404,7 @@ impl<'a> Stream<'a> {
                                     if XIMaskIsSet(mask, i) {
                                         buffer.push_back(Event::RawMotion {
                                             device: DeviceID(evt.deviceid),
-                                            axis: AxisID(i),
+                                            axis: AxisID(i as u32),
                                             value: unsafe { *raw_value }
                                         });
                                         raw_value = unsafe { raw_value.offset(1) };
@@ -415,14 +415,14 @@ impl<'a> Stream<'a> {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
                                 buffer.push_back(Event::RawButtonPress {
                                     device: DeviceID(evt.deviceid),
-                                    button: ButtonID(evt.detail),
+                                    button: ButtonID(evt.detail as u32),
                                 });
                             },
                             XI_RawButtonRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
                                 buffer.push_back(Event::RawButtonRelease {
                                     device: DeviceID(evt.deviceid),
-                                    button: ButtonID(evt.detail),
+                                    button: ButtonID(evt.detail as u32),
                                 });
                             },
                             XI_RawKeyPress => {
@@ -470,7 +470,7 @@ impl<'a> Stream<'a> {
                                 buffer.push_back(Event::ButtonPress {
                                     window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
-                                    button: ButtonID(evt.detail),
+                                    button: ButtonID(evt.detail as u32),
                                 });
                             },
                             XI_ButtonRelease => {
@@ -478,7 +478,7 @@ impl<'a> Stream<'a> {
                                 buffer.push_back(Event::ButtonRelease {
                                     window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
-                                    button: ButtonID(evt.detail),
+                                    button: ButtonID(evt.detail as u32),
                                 });
                             },
                             XI_Motion => {
@@ -490,7 +490,7 @@ impl<'a> Stream<'a> {
                                         buffer.push_back(Event::Motion {
                                             window: WindowID(evt.event),
                                             device: DeviceID(evt.deviceid),
-                                            axis: AxisID(i),
+                                            axis: AxisID(i as u32),
                                             value: unsafe { *value }
                                         });
                                         value = unsafe { value.offset(1) };

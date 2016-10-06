@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use super::libevdev_sys as libevdev;
 
 use std::{io, mem, slice, ptr};
@@ -5,7 +6,7 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 
-use libc::{c_char, c_uint, c_int};
+use libc::{c_char, c_uint, c_int, EAGAIN};
 
 pub type AbsInfo = libevdev::input_absinfo;
 pub type InputEvent = libevdev::input_event;
@@ -15,8 +16,9 @@ pub enum LEDValue {
 }
 
 pub enum ReadStatus {
-    Success = libevdev::READ_STATUS_SUCCESS as isize,
-    Sync = libevdev::READ_STATUS_SYNC as isize,
+    Success(InputEvent),
+    Sync(InputEvent),
+    Again
 }
 
 pub type ReadFlag = libevdev::read_flag;
@@ -72,17 +74,31 @@ impl Device {
         }
     }
 
-    pub fn next_event(&self, flags: ReadFlag) -> io::Result<(ReadStatus, InputEvent)> {
+    pub fn next_event(&self, flags: ReadFlag) -> ReadStatus {
         unsafe {
             let mut result = mem::uninitialized();
             let rc = libevdev::next_event(self.0, flags, &mut result as *mut libevdev::input_event);
+            const AGAIN : u32 = -EAGAIN as u32;
             match rc as u32 {
-                libevdev::READ_STATUS_SUCCESS => Ok((ReadStatus::Success, result)),
-                libevdev::READ_STATUS_SYNC => Ok((ReadStatus::Sync, result)),
-                _ => Err(io::Error::from_raw_os_error(-rc)),
+                libevdev::READ_STATUS_SUCCESS => ReadStatus::Success(result),
+                libevdev::READ_STATUS_SYNC => ReadStatus::Sync(result),
+                AGAIN => ReadStatus::Again,
+                _ => panic!("unrecognized return code {} from libevdev::next_event", rc),
             }
         }
     }
+}
+
+pub fn event_type_get_name(ty: c_uint) -> Option<&'static OsStr> {
+    unsafe { nullable_to_os_str(libevdev::event_type_get_name(ty)) }
+}
+
+pub fn event_code_get_name(ty: c_uint, code: c_uint) -> Option<&'static OsStr> {
+    unsafe { nullable_to_os_str(libevdev::event_code_get_name(ty, code)) }
+}
+
+pub fn property_get_name(property: c_uint) -> Option<&'static OsStr> {
+    unsafe { nullable_to_os_str(libevdev::property_get_name(property)) }
 }
 
 impl Drop for Device {

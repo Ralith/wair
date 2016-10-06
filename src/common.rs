@@ -2,10 +2,10 @@ use std::fmt;
 use std::hash::Hash;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct AxisID(pub i32);
+pub struct AxisID(pub u32);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct ButtonID(pub i32);
+pub struct ButtonID(pub u32);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct ScanCode(pub u32);
@@ -26,7 +26,7 @@ impl fmt::Debug for KeySym {
 }
 
 #[derive(Debug, Clone)]
-pub enum Event<W : WindowID, D : DeviceID> {
+pub enum Event<W: WindowID, D: DeviceID> {
     Map(W),
     Unmap(W),
     Quit(W),
