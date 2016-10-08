@@ -20,7 +20,7 @@ use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 
 use common;
-use common::{Event, AxisID, ButtonID, ScanCode, KeySym};
+use common::{Event, AxisID, ButtonID, Keycode, Keysym};
 
 struct Extension {
     opcode: c_int,
@@ -288,16 +288,16 @@ impl Stream {
         unsafe { xlib::XUnmapWindow(self.context().display, window.0); };
     }
 
-    pub fn key_sym_name(key: KeySym) -> String {
+    pub fn keysym_name(key: Keysym) -> String {
         self::xkbcommon::xkb::keysym_get_name(key.0)
     }
 
-    pub fn key_sym_from_name(name: &str) -> Option<KeySym> {
+    pub fn keysym_from_name(name: &str) -> Option<Keysym> {
         let sym = self::xkbcommon::xkb::keysym_from_name(name, 0);
         if sym == xkb::keysyms::KEY_NoSymbol {
             None
         } else {
-            Some(KeySym(sym))
+            Some(Keysym(sym))
         }
     }
 
@@ -436,8 +436,8 @@ impl Stream {
                                 let kb = &keyboards[&DeviceID(evt.deviceid)];
                                 buffer.push_back(Event::RawKeyPress {
                                     device: DeviceID(evt.deviceid),
-                                    scan_code: ScanCode(evt.detail as u32),
-                                    key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    keycode: Keycode(evt.detail as u32),
+                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
                                     text: kb.state.key_get_utf8(evt.detail as u32),
                                 });
                             },
@@ -446,8 +446,8 @@ impl Stream {
                                 let kb = &keyboards[&DeviceID(evt.deviceid)];
                                 buffer.push_back(Event::RawKeyRelease {
                                     device: DeviceID(evt.deviceid),
-                                    scan_code: ScanCode(evt.detail as u32),
-                                    key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    keycode: Keycode(evt.detail as u32),
+                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
                                 });
                             },
                             XI_KeyPress => {
@@ -456,8 +456,8 @@ impl Stream {
                                 buffer.push_back(Event::KeyPress {
                                     window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
-                                    scan_code: ScanCode(evt.detail as u32),
-                                    key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    keycode: Keycode(evt.detail as u32),
+                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
                                     text: kb.state.key_get_utf8(evt.detail as u32),
                                 });
                             },
@@ -467,8 +467,8 @@ impl Stream {
                                 buffer.push_back(Event::KeyRelease {
                                     window: WindowID(evt.event),
                                     device: DeviceID(evt.deviceid),
-                                    key_sym: KeySym(kb.state.key_get_one_sym(evt.detail as u32)),
-                                    scan_code: ScanCode(evt.detail as u32),
+                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    keycode: Keycode(evt.detail as u32),
                                 });
                             },
                             XI_ButtonPress => {

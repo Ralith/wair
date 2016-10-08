@@ -8,20 +8,20 @@ pub struct AxisID(pub u32);
 pub struct ButtonID(pub u32);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct ScanCode(pub u32);
+pub struct Keycode(pub u32);
 
-impl fmt::Debug for ScanCode {
+impl fmt::Debug for Keycode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ScanCode({:X})", self.0)
+        write!(f, "Keycode({:X})", self.0)
     }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct KeySym(pub u32);
+pub struct Keysym(pub u32);
 
-impl fmt::Debug for KeySym {
+impl fmt::Debug for Keysym {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "KeySym({:X})", self.0)
+        write!(f, "Keysym({:X})", self.0)
     }
 }
 
@@ -37,10 +37,10 @@ pub enum Event<W: WindowID, D: DeviceID> {
     RawButtonRelease { device: D, button: ButtonID },
     ButtonPress { window: W, device: D, button: ButtonID },
     ButtonRelease { window: W, device: D, button: ButtonID },
-    RawKeyPress { device: D, scan_code: ScanCode, key_sym: KeySym, text: String },
-    RawKeyRelease { device: D, scan_code: ScanCode, key_sym: KeySym },
-    KeyPress { window: W, device: D, scan_code: ScanCode, key_sym: KeySym, text: String },
-    KeyRelease { window: W, device: D, scan_code: ScanCode, key_sym: KeySym },
+    RawKeyPress { device: D, keycode: Keycode, keysym: Keysym, text: String },
+    RawKeyRelease { device: D, keycode: Keycode, keysym: Keysym },
+    KeyPress { window: W, device: D, keycode: Keycode, keysym: Keysym, text: String },
+    KeyRelease { window: W, device: D, keycode: Keycode, keysym: Keysym },
     DeviceAdded { device: D },
     DeviceRemoved { device: D },
 }
@@ -59,10 +59,10 @@ impl<W: WindowID, D: DeviceID> Event<W, D> {
             RawButtonRelease { device: d, button: b } => RawButtonRelease { device: g(d), button: b },
             ButtonPress { window: w, device: d, button: b } => ButtonPress { window: f(w), device: g(d), button: b },
             ButtonRelease { window: w, device: d, button: b } => ButtonRelease { window: f(w), device: g(d), button: b },
-            RawKeyPress { device: d, key_sym: b, scan_code: c, text: s } => RawKeyPress { device: g(d), key_sym: b, scan_code: c, text: s },
-            RawKeyRelease { device: d, key_sym: b, scan_code: c } => RawKeyRelease { device: g(d), key_sym: b, scan_code: c },
-            KeyPress { window: w, device: d, key_sym: b, scan_code: c, text: s } => KeyPress { window: f(w), device: g(d), key_sym: b, scan_code: c, text: s },
-            KeyRelease { window: w, device: d, key_sym: b, scan_code: c } => KeyRelease { window: f(w), device: g(d), key_sym: b, scan_code: c },
+            RawKeyPress { device: d, keysym: b, keycode: c, text: s } => RawKeyPress { device: g(d), keysym: b, keycode: c, text: s },
+            RawKeyRelease { device: d, keysym: b, keycode: c } => RawKeyRelease { device: g(d), keysym: b, keycode: c },
+            KeyPress { window: w, device: d, keysym: b, keycode: c, text: s } => KeyPress { window: f(w), device: g(d), keysym: b, keycode: c, text: s },
+            KeyRelease { window: w, device: d, keysym: b, keycode: c } => KeyRelease { window: f(w), device: g(d), keysym: b, keycode: c },
             DeviceAdded { device: d } => DeviceAdded { device: g(d) },
             DeviceRemoved { device: d } => DeviceRemoved { device: g(d) },
         }

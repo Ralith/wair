@@ -20,8 +20,8 @@ fn handle_event<W: WindowID, D: DeviceID>(e: Event<W, D>) -> Result<(), ()> {
     println!("got event: {:?}", e);
     match e {
         Event::Quit(_) => Err(()),
-        Event::KeyPress { key_sym: sym, .. } => {
-            println!("sym: {}", x11::Stream::key_sym_name(sym));
+        Event::KeyPress { keysym: sym, .. } => {
+            println!("sym: {}", x11::Stream::keysym_name(sym));
             Ok(())
         },
         _ => Ok(()),
