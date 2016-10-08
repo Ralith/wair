@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 extern crate libudev_sys;
 
 use std::{io, ptr};
