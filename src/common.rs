@@ -1,5 +1,8 @@
-use std::fmt;
+use std::{io, fmt};
 use std::hash::Hash;
+
+use tokio_core::reactor::Handle;
+use futures::stream::Stream;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct AxisID(pub u32);
@@ -69,7 +72,21 @@ impl<W: WindowID, D: DeviceID> Event<W, D> {
     }
 }
 
-pub trait WindowID: fmt::Debug + Clone + Hash + Eq {}
+pub trait Wrapper {
+    type Native;
+    fn get_native(&self) -> Self::Native;
+}
+
+pub trait WindowSystem: Wrapper {
+    type WindowID: WindowID;
+    type DeviceID: DeviceID;
+    type EventStream: Stream<Item=Event<Self::WindowID, Self::DeviceID>>;
+    fn open(handle: &Handle) -> io::Result<(Self, Self::EventStream)> where Self: Sized;
+    fn new_window(&self, builder: WindowBuilder) -> Self::WindowID;
+    fn window_map(&self, window: Self::WindowID);
+    fn window_unmap(&self, window: Self::WindowID);
+}
+pub trait WindowID: fmt::Debug + Copy + Clone + Hash + Eq + Wrapper {}
 pub trait DeviceID: fmt::Debug + Clone + Hash + Eq {}
 
 pub struct WindowBuilder<'a> {

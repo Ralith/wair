@@ -49,6 +49,14 @@ impl Drop for Context {
 
 pub struct Device<'a>(*mut udev_device, PhantomData<&'a Context>); // nonzero
 
+unsafe fn option_cstr<'a>(x: *const c_char) -> Option<&'a CStr> {
+    if x.is_null() {
+        None
+    } else {
+        Some(CStr::from_ptr(x))
+    }
+}
+
 impl<'a> Device<'a> {
     pub fn new_from_syspath(context: &'a Context, path: &CStr) -> io::Result<Device<'a>> {
         Ok(Device(try_alloc!(unsafe { udev_device_new_from_syspath(context.0, path.as_ptr()) }), PhantomData))
@@ -58,19 +66,28 @@ impl<'a> Device<'a> {
         unsafe { CStr::from_ptr(udev_device_get_action(self.0)) }
     }
 
+    pub fn subsystem(&self) -> Option<&CStr> {
+        unsafe { option_cstr(udev_device_get_subsystem(self.0)) }
+    }
+
     pub fn sysname(&self) -> &CStr {
         unsafe { CStr::from_ptr(udev_device_get_sysname(self.0)) }
     }
 
+    pub fn sysnum(&self) -> Option<&CStr> {
+        unsafe { option_cstr(udev_device_get_sysnum(self.0)) }
+    }
+
     pub fn devnode(&self) -> Option<&CStr> {
-        unsafe { 
-            let x = udev_device_get_devnode(self.0);
-            if x.is_null() {
-                None
-            } else {
-                Some(CStr::from_ptr(x))
-            }
-        }
+        unsafe { option_cstr(udev_device_get_devnode(self.0)) }
+    }
+
+    pub fn devtype(&self) -> Option<&CStr> {
+        unsafe { option_cstr(udev_device_get_devtype(self.0)) }
+    }
+
+    pub fn driver(&self) -> Option<&CStr> {
+        unsafe { option_cstr(udev_device_get_driver(self.0)) }
     }
 }
 

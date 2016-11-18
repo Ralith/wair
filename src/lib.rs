@@ -16,9 +16,5 @@ pub mod x11;
 #[cfg(feature = "evdev-backend")]
 pub mod evdev;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-    }
-}
+#[cfg(feature = "x11-backend")]
+pub use x11::Context as DefaultWindowSystem;

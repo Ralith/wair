@@ -10,8 +10,10 @@ use wair::*;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 enum GenericDevice {
+    #[cfg(feature = "x11-backend")]
     X(x11::DeviceID),
-    Evdev(evdev::DeviceID)
+    #[cfg(feature = "evdev-backend")]
+    Evdev(evdev::DeviceID),
 }
 
 impl DeviceID for GenericDevice {}
@@ -21,7 +23,7 @@ fn handle_event<W: WindowID, D: DeviceID>(e: Event<W, D>) -> Result<(), ()> {
     match e {
         Event::Quit(_) => Err(()),
         Event::KeyPress { keysym: sym, .. } => {
-            println!("sym: {}", x11::Stream::keysym_name(sym));
+            println!("sym: {}", x11::Context::keysym_name(sym));
             Ok(())
         },
         _ => Ok(()),
@@ -34,16 +36,17 @@ fn main() {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
 
-    let x_stream = x11::Stream::new(&handle).unwrap();
-    let window = x_stream.new_window(WindowBuilder::new().name("wair input demo")).unwrap();
-    x_stream.window_map(window);
-    x_stream.flush();
+    let (context, stream) = DefaultWindowSystem::open(&handle).unwrap();
+    let window = context.new_window(WindowBuilder::new().name("wair input demo"));
+    context.window_map(window);
+    context.flush();
 
-    let ev_stream = evdev::Stream::new(&handle).unwrap();
+    let (_, ev_stream) = evdev::Context::new(&handle).unwrap();
 
-    let stream = x_stream
+    let stream = stream
         .map(|e| e.map(|w| w, GenericDevice::X))
-        .merge(ev_stream.map(|e| e.map(|w| -> x11::WindowID { void::unreachable(w.0) }, GenericDevice::Evdev)));
+        .merge(ev_stream.map(|e| e.map(|w| -> x11::WindowID { void::unreachable(w.0) }, GenericDevice::Evdev)))
+        ;
 
     let _ = l.run(stream.for_each(|e| {
         use futures::stream::MergedItem::*;
@@ -52,5 +55,6 @@ fn main() {
             Second(x) => handle_event(x),
             Both(x, y) => handle_event(x).and_then(|_| handle_event(y)),
         }
-    }));
+    }
+    ));
 }
