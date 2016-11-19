@@ -5,10 +5,10 @@ authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
 description = "Windowing and Input for Rust"
 repository = "https://github.com/Ralith/wair"
 license = "Apache-2.0"
-keywords = ["input"]
+keywords = ["input", "window"]
 
 [features]
-default = ["x11-backend", "evdev-backend"]
+default = ["x11-backend", "evdev-backend", "vulkano"]
 x11-backend = ["x11", "xcb", "xkbcommon"]
 wayland-backend = ["wayland-client"]
 evdev-backend = ["libudev-sys"]
@@ -21,6 +21,7 @@ futures = "0.1.1"
 env_logger = "0.3.5"
 libc = "0.2.0"
 void = "1.0.2"
+vulkano = { version = "0.3.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 x11 = { version = "2.11.0", optional = true, features = ["xinput"] }

@@ -1,8 +1,13 @@
 use std::{io, fmt};
 use std::hash::Hash;
+#[cfg(feature = "vulkano")]
+use std::sync::Arc;
 
 use tokio_core::reactor::Handle;
 use futures::stream::Stream;
+
+#[cfg(feature = "vulkano")]
+use vulkano;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct AxisID(pub u32);
@@ -91,6 +96,8 @@ pub trait WindowSystem: Wrapper {
     type EventStream: Stream<Item=Event<Self::WindowID, Self::DeviceID>>;
     fn open(handle: &Handle) -> io::Result<(Self, Self::EventStream)> where Self: Sized;
     fn new_window(&self, builder: WindowBuilder) -> Self::WindowID;
+    #[cfg(feature = "vulkano")]
+    unsafe fn create_vulkan_surface(&self, instance: &Arc<vulkano::instance::Instance>, window: Self::WindowID) -> Result<Arc<vulkano::swapchain::Surface>, vulkano::swapchain::SurfaceCreationError>;
 }
 
 pub trait WindowID: fmt::Debug + Copy + Clone + Hash + Eq + Wrapper {}

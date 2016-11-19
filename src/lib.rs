@@ -9,6 +9,9 @@ extern crate void;
 #[cfg(feature = "x11-backend")]
 extern crate xcb;
 
+#[cfg(feature = "vulkano")]
+extern crate vulkano;
+
 mod platform;
 mod common;
 

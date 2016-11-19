@@ -1,4 +1,6 @@
 use std::io;
+#[cfg(feature = "vulkano")]
+use std::sync::Arc;
 
 use futures;
 use futures::{Poll, Async};
@@ -15,6 +17,8 @@ use common::{Wrapper, Event, DeviceEvent};
 use x11;
 #[cfg(feature = "evdev-backend")]
 use evdev;
+#[cfg(feature = "vulkano")]
+use vulkano;
 
 pub enum WindowSystem {
     #[cfg(feature = "x11-backend")]
@@ -39,10 +43,23 @@ impl Wrapper for WindowSystem {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct Impossible(Void);
+impl Eq for Impossible {}
+impl ::std::hash::Hash for Impossible {
+    fn hash<H: ::std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum WindowID {
     #[cfg(feature = "x11-backend")]
     X11(x11::WindowID),
+    Dummy(Impossible),         // Suppress "unreachable pattern" error in unwraps if only one window system is enabled
+}
+
+impl WindowID {
+    #[cfg(feature = "x11-backend")]
+    fn unwrap_x11(self) -> x11::WindowID { match self { WindowID::X11(x) => x, _ => panic!("unexpected window ID"), } }
 }
 
 pub enum NativeWindow {
@@ -57,6 +74,7 @@ impl Wrapper for WindowID {
         match self {
             #[cfg(feature = "x11-backend")]
             &WindowID::X11(ref w) => NativeWindow::X11(w.get_native()),
+            &WindowID::Dummy(Impossible(x)) => void::unreachable(x),
         }
     }
 }
@@ -162,6 +180,16 @@ impl common::WindowSystem for WindowSystem {
         match self {
             #[cfg(feature = "x11-backend")]
             &X11(ref w) => WindowID::X11(w.new_window(builder)),
+        }
+    }
+
+    #[cfg(feature = "vulkano")]
+    unsafe fn create_vulkan_surface(&self, instance: &Arc<vulkano::instance::Instance>, window: Self::WindowID)
+                                    -> Result<Arc<vulkano::swapchain::Surface>, vulkano::swapchain::SurfaceCreationError> {
+        use self::WindowSystem::*;
+        match self {
+            #[cfg(feature = "x11-backend")]
+            &X11(ref w) => w.create_vulkan_surface(instance, window.unwrap_x11()),
         }
     }
 }

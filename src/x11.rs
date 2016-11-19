@@ -10,10 +10,14 @@ use std::collections::{VecDeque, HashMap};
 use std::ffi::{CString, CStr};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+#[cfg(feature = "vulkano")]
+use std::sync::Arc;
 
 use libc::*;
 use xcb;
 
+#[cfg(feature = "vulkano")]
+use vulkano;
 use void::Void;
 use mio;
 use tokio_core::reactor::{PollEvented, Handle};
@@ -240,6 +244,12 @@ impl common::WindowSystem for Context {
         self.window_set_name(window, builder.name);
         self.window_map(window);
         window
+    }
+
+    #[cfg(feature = "vulkano")]
+    unsafe fn create_vulkan_surface(&self, instance: &Arc<vulkano::instance::Instance>, window: Self::WindowID)
+                                    -> Result<Arc<vulkano::swapchain::Surface>, vulkano::swapchain::SurfaceCreationError> {
+        vulkano::swapchain::Surface::from_xcb(instance, self.get_native(), window.get_native())
     }
 }
 
