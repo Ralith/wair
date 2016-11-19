@@ -15,12 +15,13 @@ use std::rc::Rc;
 
 use libc::*;
 
+use void::Void;
 use mio;
 use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 
 use common;
-use common::{Event, AxisID, ButtonID, Keycode, Keysym, Wrapper};
+use common::{Event, WindowEvent, DeviceEvent, InputEvent, AxisID, ButtonID, Keycode, Keysym, Wrapper};
 
 #[derive(Debug, Copy, Clone)]
 struct Extension {
@@ -170,6 +171,14 @@ impl Context {
             Some(Keysym(sym))
         }
     }
+
+    fn window_map(&self, window: WindowID) {
+        unsafe { xlib::XMapWindow(self.0.display(), window.0); };
+    }
+
+    fn window_unmap(&self, window: WindowID) {
+        unsafe { xlib::XUnmapWindow(self.0.display(), window.0); };
+    }
 }
 
 impl Wrapper for Context {
@@ -230,15 +239,8 @@ impl common::WindowSystem for Context {
                                        mem::transmute::<*const xlib::Atom, *mut xlib::Atom>(&self.0.atoms.wm_delete_window as *const xlib::Atom), 1); };
         let window = WindowID(handle);
         self.window_set_name(window, builder.name);
+        self.window_map(window);
         window
-    }
-
-    fn window_map(&self, window: WindowID) {
-        unsafe { xlib::XMapWindow(self.0.display(), window.0); };
-    }
-
-    fn window_unmap(&self, window: WindowID) {
-        unsafe { xlib::XUnmapWindow(self.0.display(), window.0); };
     }
 }
 
@@ -380,19 +382,27 @@ impl Stream {
                         let button_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIButtonClassInfo>(class) };
                         let mask = unsafe { slice::from_raw_parts(button_info.state.mask, button_info.state.mask_len as usize) };
                         for i in 0..button_info.num_buttons {
-                            self.buffer.borrow_mut().push_back(
-                                if XIMaskIsSet(mask, i) {
-                                    Event::RawButtonPress { device: device, button: ButtonID(i as u32) }
+                            self.buffer.borrow_mut().push_back(Event::Device {
+                                device: device,
+                                event: DeviceEvent::Input(if XIMaskIsSet(mask, i) {
+                                    InputEvent::ButtonPress { button: ButtonID(i as u32) }
                                 } else {
-                                    Event::RawButtonRelease { device: device, button: ButtonID(i as u32) }
-                                });
+                                    InputEvent::ButtonRelease { button: ButtonID(i as u32) }
+                                })
+                            });
                         }
                     }
                 },
                 XIValuatorClass => {
                     if real_device {
                         let axis_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIValuatorClassInfo>(class) };
-                        self.buffer.borrow_mut().push_back(Event::RawMotion{ device: device, axis: AxisID(axis_info.number as u32), value: axis_info.value });
+                        self.buffer.borrow_mut().push_back(Event::Device {
+                            device: device,
+                            event: DeviceEvent::Input(InputEvent::Motion {
+                                axis: AxisID(axis_info.number as u32),
+                                value: axis_info.value
+                            })
+                        });
                     }
                 },
                 ty => {
@@ -404,6 +414,8 @@ impl Stream {
 
     #[allow(non_upper_case_globals)]
     fn queue_event(&self) {
+        use DeviceEvent::*;
+
         let storage = self.next_event();
         use self::x11::xlib::*;
         let event = &XAnyEvent::from(&storage);
@@ -411,14 +423,14 @@ impl Stream {
         let mut buffer = self.buffer.borrow_mut();
         let mut keyboards = self.keyboards.borrow_mut();
         match event.type_ {
-            MapNotify => buffer.push_back(Event::Map(window)),
-            UnmapNotify => buffer.push_back(Event::Unmap(window)),
+            MapNotify => buffer.push_back(Event::Window { window: window, event: WindowEvent::Map }),
+            UnmapNotify => buffer.push_back(Event::Window { window: window, event: WindowEvent::Unmap }),
             ClientMessage => {
                 let xclient = &XClientMessageEvent::from(&storage);
                 if xclient.message_type == self.io.get_ref().0.atoms.wm_protocols {
                     let atom = xclient.data.get_long(0) as xlib::Atom;
                     if atom == self.io.get_ref().0.atoms.wm_delete_window {
-                        buffer.push_back(Event::Quit(window));
+                        buffer.push_back(Event::Window { window: window, event: WindowEvent::Quit });
                     } else {
                         debug!("unhandled WM_PROTOCOLS message {}", self.atom_name(atom));
                     }
@@ -441,10 +453,12 @@ impl Stream {
                                 let mut raw_value = evt.raw_values;
                                 for i in 0..evt.valuators.mask_len*8 {
                                     if XIMaskIsSet(mask, i) {
-                                        buffer.push_back(Event::RawMotion {
+                                        buffer.push_back(Event::Device {
                                             device: DeviceID(evt.deviceid),
-                                            axis: AxisID(i as u32),
-                                            value: unsafe { *raw_value }
+                                            event: Input(InputEvent::Motion {
+                                                axis: AxisID(i as u32),
+                                                value: unsafe { *raw_value }
+                                            })
                                         });
                                         raw_value = unsafe { raw_value.offset(1) };
                                     }
@@ -452,72 +466,96 @@ impl Stream {
                             },
                             XI_RawButtonPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
-                                buffer.push_back(Event::RawButtonPress {
+                                buffer.push_back(Event::Device {
                                     device: DeviceID(evt.deviceid),
-                                    button: ButtonID(evt.detail as u32),
+                                    event: Input(InputEvent::ButtonPress {
+                                        button: ButtonID(evt.detail as u32),
+                                    })
                                 });
                             },
                             XI_RawButtonRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
-                                buffer.push_back(Event::RawButtonRelease {
+                                buffer.push_back(Event::Device {
                                     device: DeviceID(evt.deviceid),
-                                    button: ButtonID(evt.detail as u32),
+                                    event: Input(InputEvent::ButtonRelease {
+                                        button: ButtonID(evt.detail as u32),
+                                    })
                                 });
                             },
                             XI_RawKeyPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
                                 let kb = &keyboards[&DeviceID(evt.deviceid)];
-                                buffer.push_back(Event::RawKeyPress {
+                                buffer.push_back(Event::Device {
                                     device: DeviceID(evt.deviceid),
-                                    keycode: Keycode(evt.detail as u32),
-                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
-                                    text: kb.state.key_get_utf8(evt.detail as u32),
+                                    event: Input(InputEvent::KeyPress {
+                                        keycode: Keycode(evt.detail as u32),
+                                        keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                        text: kb.state.key_get_utf8(evt.detail as u32),
+                                    })
                                 });
                             },
                             XI_RawKeyRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
                                 let kb = &keyboards[&DeviceID(evt.deviceid)];
-                                buffer.push_back(Event::RawKeyRelease {
+                                buffer.push_back(Event::Device {
                                     device: DeviceID(evt.deviceid),
-                                    keycode: Keycode(evt.detail as u32),
-                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    event: Input(InputEvent::KeyRelease {
+                                        keycode: Keycode(evt.detail as u32),
+                                        keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    })
                                 });
                             },
                             XI_KeyPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
                                 let kb = &keyboards[&DeviceID(evt.deviceid)];
-                                buffer.push_back(Event::KeyPress {
+                                buffer.push_back(Event::Window {
                                     window: WindowID(evt.event),
-                                    device: DeviceID(evt.deviceid),
-                                    keycode: Keycode(evt.detail as u32),
-                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
-                                    text: kb.state.key_get_utf8(evt.detail as u32),
+                                    event: WindowEvent::Input {
+                                        device: DeviceID(evt.deviceid),
+                                        event: InputEvent::KeyPress {
+                                            keycode: Keycode(evt.detail as u32),
+                                            keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                            text: kb.state.key_get_utf8(evt.detail as u32),
+                                        }
+                                    }
                                 });
                             },
                             XI_KeyRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
                                 let kb = &keyboards[&DeviceID(evt.deviceid)];
-                                buffer.push_back(Event::KeyRelease {
+                                buffer.push_back(Event::Window {
                                     window: WindowID(evt.event),
-                                    device: DeviceID(evt.deviceid),
-                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
-                                    keycode: Keycode(evt.detail as u32),
+                                    event: WindowEvent::Input {
+                                        device: DeviceID(evt.deviceid),
+                                        event: InputEvent::KeyRelease {
+                                            keycode: Keycode(evt.detail as u32),
+                                            keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                        }
+                                    }
                                 });
                             },
                             XI_ButtonPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
-                                buffer.push_back(Event::ButtonPress {
+                                buffer.push_back(Event::Window {
                                     window: WindowID(evt.event),
-                                    device: DeviceID(evt.deviceid),
-                                    button: ButtonID(evt.detail as u32),
+                                    event: WindowEvent::Input {
+                                        device: DeviceID(evt.deviceid),
+                                        event: InputEvent::ButtonPress {
+                                            button: ButtonID(evt.detail as u32),
+                                        }
+                                    }
                                 });
                             },
                             XI_ButtonRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIDeviceEvent>(xcookie.data) };
-                                buffer.push_back(Event::ButtonRelease {
+                                buffer.push_back(Event::Window {
                                     window: WindowID(evt.event),
-                                    device: DeviceID(evt.deviceid),
-                                    button: ButtonID(evt.detail as u32),
+                                    event: WindowEvent::Input {
+                                        device: DeviceID(evt.deviceid),
+                                        event: InputEvent::ButtonRelease {
+                                            button: ButtonID(evt.detail as u32),
+                                        }
+                                    }
                                 });
                             },
                             XI_Motion => {
@@ -526,19 +564,25 @@ impl Stream {
                                 let mut value = evt.valuators.values;
                                 for i in 0..evt.valuators.mask_len*8 {
                                     if XIMaskIsSet(mask, i) {
-                                        buffer.push_back(Event::Motion {
+                                        buffer.push_back(Event::Window {
                                             window: WindowID(evt.event),
-                                            device: DeviceID(evt.deviceid),
-                                            axis: AxisID(i as u32),
-                                            value: unsafe { *value }
+                                            event: WindowEvent::Input {
+                                                device: DeviceID(evt.deviceid),
+                                                event: InputEvent::Motion {
+                                                    axis: AxisID(i as u32),
+                                                    value: unsafe { *value }
+                                                }
+                                            }
                                         });
                                         value = unsafe { value.offset(1) };
                                     }
                                 };
-                                buffer.push_back(Event::PointerMotion {
+                                buffer.push_back(Event::Window {
                                     window: WindowID(evt.event),
-                                    device: DeviceID(evt.deviceid),
-                                    pos: (evt.event_x, evt.event_y),
+                                    event: WindowEvent::PointerMotion {
+                                        device: DeviceID(evt.deviceid),
+                                        pos: (evt.event_x, evt.event_y),
+                                    }
                                 });
                             },
                             XI_HierarchyChanged => {
@@ -546,14 +590,16 @@ impl Stream {
                                 for info in unsafe { slice::from_raw_parts(evt.info, evt.num_info as usize) } {
                                     if 0 != info.flags & (XISlaveAdded | XIMasterAdded) {
                                         for di in self.io.get_ref().0.query_device(info.deviceid) {
-                                            buffer.push_back(Event::DeviceAdded {
+                                            buffer.push_back(Event::Device {
                                                 device: DeviceID(di.deviceid),
+                                                event: Added,
                                             });
                                             self.open_device(&di);
                                         }
                                     } else if 0 != info.flags & (XISlaveRemoved | XIMasterRemoved) {
-                                        buffer.push_back(Event::DeviceRemoved {
+                                        buffer.push_back(Event::Device {
                                             device: DeviceID(info.deviceid),
+                                            event: Removed,
                                         });
                                     }
                                 }
@@ -601,29 +647,27 @@ impl Stream {
 
 impl futures::stream::Stream for Stream {
     type Item = Event<WindowID, DeviceID>;
-    type Error = ();
+    type Error = Void;
 
     fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
-        let x = self.buffer.borrow_mut().pop_front();
-        match x {
-            Some(x) => Ok(futures::Async::Ready(Some(x))),
-            None => {
-                if self.pending() == 0 && futures::Async::NotReady == self.io.poll_read() {
-                    return Ok(futures::Async::NotReady);
-                }
-
-                while self.pending() != 0 && self.buffer.borrow().is_empty() {
-                    self.queue_event();
-                }
-
-                Ok(match self.buffer.borrow_mut().pop_front() {
-                    None => {
-                        self.io.need_read();
-                        futures::Async::NotReady
-                    },
-                    Some(x) => futures::Async::Ready(Some(x)),
-                })
-            }
+        if let Some(x) = self.buffer.borrow_mut().pop_front() {
+            return Ok(futures::Async::Ready(Some(x)));
         }
+
+        if self.pending() == 0 && futures::Async::NotReady == self.io.poll_read() {
+            return Ok(futures::Async::NotReady);
+        }
+
+        while self.pending() != 0 && self.buffer.borrow().is_empty() {
+            self.queue_event();
+        }
+
+        Ok(match self.buffer.borrow_mut().pop_front() {
+            None => {
+                self.io.need_read();
+                futures::Async::NotReady
+            },
+            Some(x) => futures::Async::Ready(Some(x)),
+        })
     }
 }

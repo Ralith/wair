@@ -21,8 +21,8 @@ impl DeviceID for GenericDevice {}
 fn handle_event<W: WindowID, D: DeviceID>(e: Event<W, D>) -> Result<(), ()> {
     println!("got event: {:?}", e);
     match e {
-        Event::Quit(_) => Err(()),
-        Event::KeyPress { keysym: sym, .. } => {
+        Event::Window { event: WindowEvent::Quit, .. } => Err(()),
+        Event::Window { event: WindowEvent::Input { event: InputEvent::KeyPress { keysym: sym, .. }, .. }, .. } => {
             println!("sym: {}", x11::Context::keysym_name(sym));
             Ok(())
         },
@@ -37,24 +37,22 @@ fn main() {
     let handle = l.handle();
 
     let (context, stream) = DefaultWindowSystem::open(&handle).unwrap();
-    let window = context.new_window(WindowBuilder::new().name("wair input demo"));
-    context.window_map(window);
+    context.new_window(WindowBuilder::new().name("wair input demo"));
     context.flush();
 
-    let (_, ev_stream) = evdev::Context::new(&handle).unwrap();
+    let ev_stream = evdev::Stream::new(handle).unwrap();
 
     let stream = stream
         .map(|e| e.map(|w| w, GenericDevice::X))
-        .merge(ev_stream.map(|e| e.map(|w| -> x11::WindowID { void::unreachable(w.0) }, GenericDevice::Evdev)))
+        .merge(ev_stream.map(|(d, e)| -> Event<x11::WindowID, GenericDevice> { Event::Device { device: GenericDevice::Evdev(d), event: e } }))
         ;
 
-    let _ = l.run(stream.for_each(|e| {
+    let _ = l.run(stream.map_err(|e| void::unreachable(e)).for_each(|e| {
         use futures::stream::MergedItem::*;
         match e {
             First(x) => handle_event(x),
             Second(x) => handle_event(x),
             Both(x, y) => handle_event(x).and_then(|_| handle_event(y)),
         }
-    }
-    ));
+    }));
 }

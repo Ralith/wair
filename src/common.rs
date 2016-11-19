@@ -29,45 +29,53 @@ impl fmt::Debug for Keysym {
 }
 
 #[derive(Debug, Clone)]
+pub enum WindowEvent<D: DeviceID> {
+    Map, Unmap, Quit,
+    PointerMotion { device: D, pos: (f64, f64) },
+    Input { device: D, event: InputEvent },
+}
+
+impl<D: DeviceID> WindowEvent<D> {
+    pub fn map<E: DeviceID, F: FnOnce(D) -> E>(self, f: F) -> WindowEvent<E> {
+        use WindowEvent::*;
+        match self {
+            Map => Map,
+            Unmap => Unmap,
+            Quit => Quit,
+            PointerMotion { device, pos } => PointerMotion { device: f(device), pos: pos },
+            Input { device, event } => Input { device: f(device), event: event },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum InputEvent {
+    Motion { axis: AxisID, value: f64 },
+    ButtonPress { button: ButtonID },
+    ButtonRelease { button: ButtonID },
+    KeyPress { keycode: Keycode, keysym: Keysym, text: String },
+    KeyRelease { keycode: Keycode, keysym: Keysym },
+}
+
+#[derive(Debug, Clone)]
 pub enum Event<W: WindowID, D: DeviceID> {
-    Map(W),
-    Unmap(W),
-    Quit(W),
-    RawMotion { device: D, axis: AxisID, value: f64 },
-    Motion { window: W, device: D, axis: AxisID, value: f64 },
-    PointerMotion { window: W, device: D, pos: (f64, f64) },
-    RawButtonPress { device: D, button: ButtonID },
-    RawButtonRelease { device: D, button: ButtonID },
-    ButtonPress { window: W, device: D, button: ButtonID },
-    ButtonRelease { window: W, device: D, button: ButtonID },
-    RawKeyPress { device: D, keycode: Keycode, keysym: Keysym, text: String },
-    RawKeyRelease { device: D, keycode: Keycode, keysym: Keysym },
-    KeyPress { window: W, device: D, keycode: Keycode, keysym: Keysym, text: String },
-    KeyRelease { window: W, device: D, keycode: Keycode, keysym: Keysym },
-    DeviceAdded { device: D },
-    DeviceRemoved { device: D },
+    Window { window: W, event: WindowEvent<D> },
+    Device { device: D, event: DeviceEvent },
+}
+
+#[derive(Debug, Clone)]
+pub enum DeviceEvent {
+    Input(InputEvent),
+    Added,
+    Removed,
 }
 
 impl<W: WindowID, D: DeviceID> Event<W, D> {
-    pub fn map<T: WindowID, U: DeviceID, F: Fn(W) -> T, G: Fn(D) -> U>(self, f: F, g: G) -> Event<T, U> {
+    pub fn map<T: WindowID, U: DeviceID, F: FnOnce(W) -> T, G: FnOnce(D) -> U>(self, f: F, g: G) -> Event<T, U> {
         use Event::*;
         match self {
-            Map(x) => Map(f(x)),
-            Unmap(x) => Unmap(f(x)),
-            Quit(x) => Quit(f(x)),
-            RawMotion { device: d, axis: a, value: v } => RawMotion { device: g(d), axis: a, value: v },
-            Motion { window: w, device: d, axis: a, value: v } => Motion { window: f(w), device: g(d), axis: a, value: v},
-            PointerMotion { window: w, device: d, pos: p } => PointerMotion { window: f(w), device: g(d), pos: p},
-            RawButtonPress { device: d, button: b } => RawButtonPress { device: g(d), button: b },
-            RawButtonRelease { device: d, button: b } => RawButtonRelease { device: g(d), button: b },
-            ButtonPress { window: w, device: d, button: b } => ButtonPress { window: f(w), device: g(d), button: b },
-            ButtonRelease { window: w, device: d, button: b } => ButtonRelease { window: f(w), device: g(d), button: b },
-            RawKeyPress { device: d, keysym: b, keycode: c, text: s } => RawKeyPress { device: g(d), keysym: b, keycode: c, text: s },
-            RawKeyRelease { device: d, keysym: b, keycode: c } => RawKeyRelease { device: g(d), keysym: b, keycode: c },
-            KeyPress { window: w, device: d, keysym: b, keycode: c, text: s } => KeyPress { window: f(w), device: g(d), keysym: b, keycode: c, text: s },
-            KeyRelease { window: w, device: d, keysym: b, keycode: c } => KeyRelease { window: f(w), device: g(d), keysym: b, keycode: c },
-            DeviceAdded { device: d } => DeviceAdded { device: g(d) },
-            DeviceRemoved { device: d } => DeviceRemoved { device: g(d) },
+            Window { window, event } => Window { window: f(window), event: event.map(g) },
+            Device { device, event } => Device { device: g(device), event: event },
         }
     }
 }
@@ -83,9 +91,8 @@ pub trait WindowSystem: Wrapper {
     type EventStream: Stream<Item=Event<Self::WindowID, Self::DeviceID>>;
     fn open(handle: &Handle) -> io::Result<(Self, Self::EventStream)> where Self: Sized;
     fn new_window(&self, builder: WindowBuilder) -> Self::WindowID;
-    fn window_map(&self, window: Self::WindowID);
-    fn window_unmap(&self, window: Self::WindowID);
 }
+
 pub trait WindowID: fmt::Debug + Copy + Clone + Hash + Eq + Wrapper {}
 pub trait DeviceID: fmt::Debug + Clone + Hash + Eq {}
 
