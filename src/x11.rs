@@ -1,5 +1,4 @@
 extern crate x11;
-extern crate xcb;
 extern crate xkbcommon;
 
 use self::x11::xlib;
@@ -13,6 +12,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 
 use libc::*;
+use xcb;
 
 use void::Void;
 use mio;

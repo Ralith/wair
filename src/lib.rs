@@ -6,8 +6,14 @@ extern crate tokio_core;
 extern crate libc;
 extern crate void;
 
+#[cfg(feature = "x11-backend")]
+extern crate xcb;
+
 mod platform;
 mod common;
+
+pub mod dynamic;
+
 pub use common::*;
 
 #[cfg(feature = "x11-backend")]
