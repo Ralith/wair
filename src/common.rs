@@ -95,7 +95,7 @@ pub trait WindowSystem: Wrapper {
     type DeviceID: DeviceID;
     type EventStream: Stream<Item=Event<Self::WindowID, Self::DeviceID>>;
     fn open(handle: &Handle) -> io::Result<(Self, Self::EventStream)> where Self: Sized;
-    fn new_window(&self, builder: WindowBuilder) -> Self::WindowID;
+    fn new_window(&self, position: (i32, i32), size: (u32, u32), name: Option<&str>) -> Self::WindowID;
     #[cfg(feature = "vulkano")]
     unsafe fn create_vulkan_surface(&self, instance: &Arc<vulkano::instance::Instance>, window: Self::WindowID) -> Result<Arc<vulkano::swapchain::Surface>, vulkano::swapchain::SurfaceCreationError>;
 }
@@ -103,29 +103,34 @@ pub trait WindowSystem: Wrapper {
 pub trait WindowID: fmt::Debug + Copy + Clone + Hash + Eq + Wrapper {}
 pub trait DeviceID: fmt::Debug + Clone + Hash + Eq {}
 
+#[derive(Debug, Copy, Clone)]
 pub struct WindowBuilder<'a> {
-    pub name: &'a str,
-    pub position: (i32, i32),
-    pub size: (u32, u32),
+    position: (i32, i32),
+    size: (u32, u32),
+    name: Option<&'a str>,
 }
 
 impl<'a> WindowBuilder<'a> {
     pub fn new() -> WindowBuilder<'a> {
-        WindowBuilder { name: "wair window", position: (0, 0), size: (256, 256) }
+        WindowBuilder { name: None, position: (0, 0), size: (256, 256) }
     }
 
-    pub fn name(mut self, name: &'a str) -> WindowBuilder<'a> {
-        self.name = name;
-        self
-    }
-
-    pub fn position(mut self, position: (i32, i32)) -> WindowBuilder<'a> {
+    pub fn position(&mut self, position: (i32, i32)) -> &mut Self {
         self.position = position;
         self
     }
 
-    pub fn size(mut self, size: (u32, u32)) -> WindowBuilder<'a> {
+    pub fn size(&mut self, size: (u32, u32)) -> &mut Self {
         self.size = size;
         self
+    }
+
+    pub fn name(&mut self, name: &'a str) -> &mut Self {
+        self.name = Some(name);
+        self
+    }
+
+    pub fn build<T: WindowSystem>(&self, ws: &T) -> T::WindowID {
+        ws.new_window(self.position, self.size, self.name)
     }
 }

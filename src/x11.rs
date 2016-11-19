@@ -204,7 +204,7 @@ impl common::WindowSystem for Context {
         Ok((ctx, stream))
     }
 
-    fn new_window(&self, builder: common::WindowBuilder) -> WindowID {
+    fn new_window(&self, position: (i32, i32), size: (u32, u32), name: Option<&str>) -> WindowID {
         let border_width = 0;
         let handle = unsafe {
             let screen = xlib::XDefaultScreenOfDisplay(self.0.display());
@@ -214,7 +214,7 @@ impl common::WindowSystem for Context {
             let mut attrs : xlib::XSetWindowAttributes = mem::uninitialized();
             attrs.event_mask = xlib::StructureNotifyMask;
             attrs.background_pixel = xlib::XBlackPixelOfScreen(screen);
-            xlib::XCreateWindow(self.0.display(), root, builder.position.0, builder.position.1, builder.size.0, builder.size.1, border_width, depth,
+            xlib::XCreateWindow(self.0.display(), root, position.0, position.1, size.0, size.1, border_width, depth,
                                 xlib::InputOutput as u32, visual, xlib::CWEventMask | xlib::CWBackPixel,
                                 &mut attrs as *mut xlib::XSetWindowAttributes)
         };
@@ -241,7 +241,7 @@ impl common::WindowSystem for Context {
         unsafe { xlib::XSetWMProtocols(self.0.display(), handle,
                                        mem::transmute::<*const xlib::Atom, *mut xlib::Atom>(&self.0.atoms.wm_delete_window as *const xlib::Atom), 1); };
         let window = WindowID(handle);
-        self.window_set_name(window, builder.name);
+        if let Some(name) = name { self.window_set_name(window, name); }
         self.window_map(window);
         window
     }

@@ -15,7 +15,7 @@ fn main() {
     let handle = l.handle();
 
     let (context, stream) = dynamic::WindowSystem::open(&handle).unwrap();
-    context.new_window(WindowBuilder::new().name("wair input demo"));
+    WindowBuilder::new().name("wair input demo").build(&context);
 
     let _ = l.run(stream.map_err(|e| void::unreachable(e)).for_each(|e| {
         println!("got event: {:?}", e);

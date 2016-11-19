@@ -175,11 +175,11 @@ impl common::WindowSystem for WindowSystem {
         }))
     }
 
-    fn new_window(&self, builder: common::WindowBuilder) -> Self::WindowID {
+    fn new_window(&self, position: (i32, i32), size: (u32, u32), name: Option<&str>) -> Self::WindowID {
         use self::WindowSystem::*;
         match self {
             #[cfg(feature = "x11-backend")]
-            &X11(ref w) => WindowID::X11(w.new_window(builder)),
+            &X11(ref w) => WindowID::X11(w.new_window(position, size, name)),
         }
     }
 
