@@ -36,6 +36,7 @@ impl fmt::Debug for Keysym {
 #[derive(Debug, Clone)]
 pub enum WindowEvent<D: DeviceID> {
     Map, Unmap, Quit,
+    Resize((u32, u32)), Move((i32, i32)),
     PointerMotion { device: D, pos: (f64, f64) },
     Input { device: D, event: InputEvent },
 }
@@ -47,6 +48,8 @@ impl<D: DeviceID> WindowEvent<D> {
             Map => Map,
             Unmap => Unmap,
             Quit => Quit,
+            Resize(x) => Resize(x),
+            Move(x) => Move(x),
             PointerMotion { device, pos } => PointerMotion { device: f(device), pos: pos },
             Input { device, event } => Input { device: f(device), event: event },
         }

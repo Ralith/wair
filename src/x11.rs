@@ -7,6 +7,7 @@ use self::xkbcommon::xkb;
 
 use std::{io, mem, slice, fmt, ptr};
 use std::collections::{VecDeque, HashMap};
+use std::collections::hash_map::Entry;
 use std::ffi::{CString, CStr};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -137,12 +138,27 @@ struct Atoms {
 
 struct StreamInner(Rc<Shared>);
 
+struct WindowData {
+    size: (u32, u32),
+    position: (i32, i32),
+}
+
+impl WindowData {
+    fn new(event: &xlib::XConfigureEvent) -> WindowData {
+        WindowData {
+            size: (event.width as u32, event.height as u32),
+            position: (event.x as i32, event.y as i32),
+        }
+    }
+}
+
 pub struct Stream {
     io: PollEvented<StreamInner>,
     buffer: VecDeque<Event<WindowID, DeviceID>>,
     xkb: xkb::Context,
     xkb_base_event: u8,
     keyboards: HashMap<DeviceID, Keyboard>,
+    windows: HashMap<WindowID, WindowData>,
 }
 
 
@@ -243,6 +259,7 @@ impl common::WindowSystem for Context {
         let window = WindowID(handle);
         if let Some(name) = name { self.window_set_name(window, name); }
         self.window_map(window);
+        trace!("created window {:?}", window);
         window
     }
 
@@ -293,6 +310,7 @@ impl Stream {
             xkb: xkb::Context::new(0),
             xkb_base_event: xkb_base_event,
             keyboards: HashMap::new(),
+            windows: HashMap::new(),
         };
 
         let devices =
@@ -429,7 +447,12 @@ impl Stream {
         use self::x11::xlib::*;
         let event = &XAnyEvent::from(&storage);
         let window = WindowID(event.window);
+        trace!("hadling event for window {:?}", window);
         match event.type_ {
+            DestroyNotify => {
+                self.windows.remove(&window);
+                trace!("window destroyed")
+            },
             MapNotify => self.buffer.push_back(Event::Window { window: window, event: WindowEvent::Map }),
             UnmapNotify => self.buffer.push_back(Event::Window { window: window, event: WindowEvent::Unmap }),
             ClientMessage => {
@@ -443,6 +466,29 @@ impl Stream {
                     }
                 } else {
                     debug!("unhandled client message type {}", self.atom_name(xclient.message_type));
+                }
+            },
+            ConfigureNotify => {
+                let configure = XConfigureEvent::from(storage);
+                let size = (configure.width as u32, configure.height as u32);
+                let position = (configure.x as i32, configure.y as i32);
+                match self.windows.entry(window) {
+                    Entry::Vacant(e) => {
+                        e.insert(WindowData::new(&configure));
+                        self.buffer.push_back(Event::Window { window: window, event: WindowEvent::Move(position) });
+                        self.buffer.push_back(Event::Window { window: window, event: WindowEvent::Resize(size) });
+                    },
+                    Entry::Occupied(mut e) => {
+                        let info = e.get_mut();
+                        if info.position != position {
+                            self.buffer.push_back(Event::Window { window: window, event: WindowEvent::Move(position) });
+                            info.position = position;
+                        }
+                        if info.size != size {
+                            self.buffer.push_back(Event::Window { window: window, event: WindowEvent::Resize(size) });
+                            info.size = size;
+                        }
+                    },
                 }
             },
             GenericEvent => {
@@ -604,8 +650,10 @@ impl Stream {
                                             self.open_device(&di);
                                         }
                                     } else if 0 != info.flags & (XISlaveRemoved | XIMasterRemoved) {
+                                        let id = DeviceID(info.deviceid);
+                                        self.keyboards.remove(&id);
                                         self.buffer.push_back(Event::Device {
-                                            device: DeviceID(info.deviceid),
+                                            device: id,
                                             event: Removed,
                                         });
                                     }
