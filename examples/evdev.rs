@@ -1,11 +1,11 @@
-extern crate wair;
+extern crate wai;
 extern crate futures;
 extern crate tokio_core;
 extern crate env_logger;
 extern crate void;
 
 use tokio_core::reactor::Core;
-use wair::evdev;
+use wai::evdev;
 use futures::stream::Stream;
 
 fn main() {

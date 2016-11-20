@@ -1,4 +1,4 @@
-extern crate wair;
+extern crate wai;
 extern crate futures;
 extern crate tokio_core;
 extern crate env_logger;
@@ -6,7 +6,7 @@ extern crate void;
 
 use tokio_core::reactor::Core;
 use futures::stream::Stream;
-use wair::*;
+use wai::*;
 
 fn main() {
     env_logger::init().unwrap();
@@ -15,7 +15,7 @@ fn main() {
     let handle = l.handle();
 
     let (context, stream) = dynamic::WindowSystem::open(&handle).unwrap();
-    WindowBuilder::new().name("wair input demo").build(&context);
+    WindowBuilder::new().name("wai input demo").build(&context);
 
     let _ = l.run(stream.map_err(|e| void::unreachable(e)).for_each(|e| {
         println!("got event: {:?}", e);

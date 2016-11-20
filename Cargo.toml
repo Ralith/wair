@@ -1,5 +1,5 @@
 [package]
-name = "wair"
+name = "wai"
 version = "0.0.0"
 authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
 description = "Windowing and Input for Rust"
