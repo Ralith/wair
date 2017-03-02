@@ -35,7 +35,7 @@ impl fmt::Debug for Keysym {
 
 #[derive(Debug, Clone)]
 pub enum WindowEvent<D: DeviceID> {
-    Map, Unmap, Quit,
+    Map, Unmap, Quit, FocusIn, FocusOut,
     Resize((u32, u32)), Move((i32, i32)),
     PointerMotion { device: D, pos: (f64, f64) },
     Input { device: D, event: InputEvent },
@@ -45,6 +45,8 @@ impl<D: DeviceID> WindowEvent<D> {
     pub fn map<E: DeviceID, F: FnOnce(D) -> E>(self, f: F) -> WindowEvent<E> {
         use WindowEvent::*;
         match self {
+            FocusIn => FocusIn,
+            FocusOut => FocusOut,
             Map => Map,
             Unmap => Unmap,
             Quit => Quit,

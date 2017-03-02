@@ -228,7 +228,7 @@ impl common::WindowSystem for Context {
             let depth = xlib::XDefaultDepthOfScreen(screen);
             let visual = xlib::XDefaultVisualOfScreen(screen);
             let mut attrs : xlib::XSetWindowAttributes = mem::uninitialized();
-            attrs.event_mask = xlib::StructureNotifyMask;
+            attrs.event_mask = xlib::StructureNotifyMask | xlib::FocusChangeMask;
             attrs.background_pixel = xlib::XBlackPixelOfScreen(screen);
             xlib::XCreateWindow(self.0.display(), root, position.0, position.1, size.0, size.1, border_width, depth,
                                 xlib::InputOutput as u32, visual, xlib::CWEventMask | xlib::CWBackPixel,
@@ -670,6 +670,18 @@ impl Stream {
                     debug!("unhandled event for unknown extension {}", xcookie.extension);
                 }
             },
+            FocusIn => {
+                self.buffer.push_back(Event::Window {
+                    window: window,
+                    event: WindowEvent::FocusIn
+                });
+            }
+            FocusOut => {
+                self.buffer.push_back(Event::Window {
+                    window: window,
+                    event: WindowEvent::FocusOut
+                });
+            }
             ty => {
                 if ty == self.xkb_base_event as i32 {
                     let conn = &self.io.get_ref().0.xcb; // Manually inlined call to connection() to satisfy borrowck
