@@ -373,6 +373,11 @@ impl Stream {
         let name = unsafe { CStr::from_ptr(info.name).to_string_lossy() };
         trace!("opening device {}: \"{}\"", info.deviceid, name);
 
+        self.buffer.push_back(Event::Device {
+            device: device,
+            event: DeviceEvent::Added,
+        });
+
         let real_device = info._use == xinput2::XISlaveKeyboard || info._use == xinput2::XISlavePointer || info._use == xinput2::XIFloatingSlave;
         if real_device {
             // Register for raw events
