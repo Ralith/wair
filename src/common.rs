@@ -37,7 +37,17 @@ impl fmt::Debug for Keysym {
 pub enum WindowEvent<D: DeviceID> {
     Map, Unmap, Quit, FocusIn, FocusOut,
     Resize((u32, u32)), Move((i32, i32)),
+
+    /// Change in position of a mouse pointer
+    ///
+    /// These events are delivered only when the pointer is over a window you created. Coordinates are in absolute
+    /// window pixels, and may have higher-than-pixel precision. Some systems may provide multiple pointers,
+    /// distinguished by `device`.
+    ///
+    /// Pointer motion should be used only to implement pointer-based GUI interaction in a manner consistent with the
+    /// host system. It should never be used for non-pointer tasks such as pointing a 3D camera.
     PointerMotion { device: D, pos: (f64, f64) },
+
     Input { device: D, event: InputEvent },
 }
 
@@ -63,20 +73,52 @@ pub enum InputEvent {
     Motion { axis: AxisID, value: f64 },
     ButtonPress { button: ButtonID },
     ButtonRelease { button: ButtonID },
-    KeyPress { keycode: Keycode, keysym: Keysym, text: String },
+    KeyPress {
+        /// Identifies the physical key pressed
+        ///
+        /// This should not change if the user adjusts the host's keyboard map. Use when the physical location of the
+        /// key is more important than the key's host GUI semantics, such as for movement controls in a first-person
+        /// game.
+        keycode: Keycode,
+
+        /// Identifies the host GUI semantics of the key
+        ///
+        /// Use when the host GUI semantics of the key are more important than the physical location of the key, such as
+        /// when implementing appropriate behavior for "page up." Do not use for text input.
+        keysym: Keysym,
+
+        /// Specifies the text input arising from a keypress
+        text: String
+    },
     KeyRelease { keycode: Keycode, keysym: Keysym },
 }
 
 #[derive(Debug, Clone)]
 pub enum Event<W: WindowID, D: DeviceID> {
+    /// An event associated with a particular window you created
+    ///
+    /// Includes both window-related events such as resizing and focus changes and device inputs directed specifically
+    /// to that window.
+    ///
+    /// This class of events should be used to interoperate with the host GUI stack and implement host-like GUI
+    /// semantics.
     Window { window: W, event: WindowEvent<D> },
+
+    /// An event arising from an input device regardless of association with any particular window
+    ///
+    /// This class of events should be used when physical, unfiltered input data is desired, and is therefore
+    /// appropriate for tasks such as 3D camera control which are not consistent with host system GUI semantics.
     Device { device: D, event: DeviceEvent },
 }
 
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
     Input(InputEvent),
+
+    /// Emitted before any input events to indicate that the device has been connected
     Added,
+
+    /// Emitted after all input events to indicate that the device has been removed
     Removed,
 }
 
@@ -101,6 +143,11 @@ pub trait WindowSystem: Wrapper {
     type EventStream: Stream<Item=Event<Self::WindowID, Self::DeviceID>>;
     fn open(handle: &Handle) -> io::Result<(Self, Self::EventStream)> where Self: Sized;
     fn new_window(&self, position: (i32, i32), size: (u32, u32), name: Option<&str>) -> Self::WindowID;
+
+    /// Creates a vulkan surface on a given window
+    ///
+    /// # Safety
+    /// Must be called at most once per window.
     #[cfg(feature = "vulkano")]
     unsafe fn create_vulkan_surface(&self, instance: &Arc<vulkano::instance::Instance>, window: Self::WindowID) -> Result<Arc<vulkano::swapchain::Surface>, vulkano::swapchain::SurfaceCreationError>;
 }

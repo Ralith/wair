@@ -1,3 +1,6 @@
+//! Wai provides facilities for creating windows and for processing mouse, keyboard, joystick, and other user inputs
+//! asynchronously.
+
 #[macro_use]
 extern crate log;
 extern crate futures;

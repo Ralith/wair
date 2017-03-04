@@ -1,3 +1,12 @@
+//! Linux kernel-level user input support.
+//!
+//! Evdev provides low-level, mostly-unfiltered data for a much larger set of device types than are exposed by the GUI
+//! stack. Normally used for joysticks and gamepads, but with suitable permissions (provided by, for example, a udev
+//! rule) it will supply input from such esoterica as laptop lid switches and touchpad pressure.
+//!
+//! Because it operates below the level of configurable keymaps, this module exposes key presses on keyboards as button
+//! events rather than attempting to determine an appropriate symbol and text input.
+
 use std::ffi::{CStr, CString, OsStr};
 use std::os::unix::io::AsRawFd;
 use std::collections::{HashMap, VecDeque};

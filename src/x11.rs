@@ -1,3 +1,19 @@
+//! X11 window creation and event handling
+//!
+//! This module employs the XInput2 extension to provide motion events with greater-than-pixel resolution when
+//! available, allowing applications to make full use of, for example, highly sensitive mice, and provide smooth,
+//! precise response for applications such as first-person games or hand-drawing.
+//!
+//! Note that the mouse pointer and any physical mouse devices are different X11 devices. The former emits window events
+//! and only does so when the mouse pointer is over one of your windows and operates in absolute coordinates based on
+//! the origin of the window, while the latter emit device events in response to all motion and operate in relative
+//! coordinates.
+//!
+//! Text input is provided by the XKB extension and xkbcommon, and should behave consistently with the host system in
+//! most circumstances, even in the face of unconventional and dynamically changing keymaps. Unfortunately, there is no
+//! good standard for advanced input methods such as used for emoji or japanese text under X11, so such input is not
+//! handled.
+
 extern crate x11;
 extern crate xkbcommon;
 

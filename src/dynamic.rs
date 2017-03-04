@@ -1,3 +1,6 @@
+//! Window creation and event processing which dispatches to appropriate backends dynamically. Use for portable
+//! programs.
+
 use std::io;
 #[cfg(feature = "vulkano")]
 use std::sync::Arc;

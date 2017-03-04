@@ -5,7 +5,7 @@ authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
 description = "Windowing And Input"
 repository = "https://github.com/Ralith/wair"
 license = "Apache-2.0"
-keywords = ["input", "window"]
+keywords = ["input", "window", "async", "futures", "tokio", "joystick"]
 categories = ["api-bindings", "asynchronous", "game-engines", "os"]
 
 [features]
