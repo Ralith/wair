@@ -46,23 +46,15 @@ impl Wrapper for WindowSystem {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct Impossible(Void);
-impl Eq for Impossible {}
-impl ::std::hash::Hash for Impossible {
-    fn hash<H: ::std::hash::Hasher>(&self, _state: &mut H) {}
-}
-
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum WindowID {
     #[cfg(feature = "x11-backend")]
     X11(x11::WindowID),
-    Dummy(Impossible),         // Suppress "unreachable pattern" error in unwraps if only one window system is enabled
 }
 
 impl WindowID {
     #[cfg(feature = "x11-backend")]
-    fn unwrap_x11(self) -> x11::WindowID { match self { WindowID::X11(x) => x, _ => panic!("unexpected window ID"), } }
+    fn unwrap_x11(self) -> x11::WindowID { match self { WindowID::X11(x) if true => x, _ => panic!("unexpected window ID"), } }
 }
 
 pub enum NativeWindow {
@@ -77,7 +69,6 @@ impl Wrapper for WindowID {
         match self {
             #[cfg(feature = "x11-backend")]
             &WindowID::X11(ref w) => NativeWindow::X11(w.get_native()),
-            &WindowID::Dummy(Impossible(x)) => void::unreachable(x),
         }
     }
 }
