@@ -7,84 +7,86 @@
 //! Because it operates below the level of configurable keymaps, this module exposes key presses on keyboards as button
 //! events rather than attempting to determine an appropriate symbol and text input.
 
+extern crate evdev;
+
+use std::{io, fmt};
 use std::ffi::{CStr, CString, OsStr};
 use std::os::unix::io::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::collections::{HashMap, VecDeque};
-use std::io;
-use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 
 use void::Void;
 use mio;
 use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 use futures::{Poll, Async};
-use libc;
+use super::nix;
 
-use common;
-use common::{DeviceEvent, InputEvent, AxisID, ButtonID};
+use {Event, AxisId, ButtonId};
 
-use super::platform::libudev as udev;
-use super::platform::libevdev;
-use super::platform::linux_event_codes as codes;
+use super::libudev as udev;
 
-struct DeviceInner(libevdev::Device);
+const EV_SYN: u16 = 0x00;
+const EV_KEY: u16 = 0x01;
+const EV_REL: u16 = 0x02;
+const EV_ABS: u16 = 0x03;
+const EV_MSC: u16 = 0x04;
 
-impl Drop for DeviceInner {
-    fn drop(&mut self) {
-        unsafe { libc::close(self.0.as_raw_fd()); };
+const REL_MAX: u16 = 0x0f;
+const REL_CNT: u16 = REL_MAX + 1;
+
+error_chain! {
+    foreign_links {
+        Nix(nix::Error);
+        Io(io::Error);
     }
 }
+
+struct DeviceInner(evdev::Device);
 
 impl mio::Evented for DeviceInner {
     fn register(&self, poll: &mio::Poll, token: mio::Token,
                 interest: mio::Ready, opts: mio::PollOpt) -> io::Result<()> {
-        mio::unix::EventedFd(&self.0.as_raw_fd()).register(poll, token, interest, opts)
+        mio::unix::EventedFd(&self.0.fd()).register(poll, token, interest, opts)
     }
 
     fn reregister(&self, poll: &mio::Poll, token: mio::Token,
                   interest: mio::Ready, opts: mio::PollOpt) -> io::Result<()> {
-        mio::unix::EventedFd(&self.0.as_raw_fd()).reregister(poll, token, interest, opts)
+        mio::unix::EventedFd(&self.0.fd()).reregister(poll, token, interest, opts)
     }
 
     fn deregister(&self, poll: &mio::Poll) -> io::Result<()> {
-        mio::unix::EventedFd(&self.0.as_raw_fd()).deregister(poll)
+        mio::unix::EventedFd(&self.0.fd()).deregister(poll)
     }
 }
 
 struct Device {
     io: PollEvented<DeviceInner>,
-    flag: libevdev::ReadFlag,
 }
 
 impl Device {
-    pub fn new(syspath: &CStr, handle: &Handle) -> io::Result<Self> {
-        let fd = unsafe { libc::open(syspath.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK) };
-        if fd == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        let inner = match libevdev::Device::new_from_fd(fd) {
-            Err(e) => {
-                unsafe { libc::close(fd) };
-                return Err(e)
-            },
-            Ok(x) => DeviceInner(x),
-        };
+    pub fn new(syspath: &Path, handle: &Handle) -> Result<Self> {
+        let inner = DeviceInner(evdev::Device::open(&syspath)?);
         let poll = PollEvented::new(inner, handle)?;
-        trace!("opened \"{}\"", poll.get_ref().0.get_name().to_string_lossy());
-        Ok(Device { io: poll, flag: libevdev::READ_FLAG_NORMAL })
+        trace!("opened \"{}\"", poll.get_ref().0.name().to_string_lossy());
+        Ok(Device { io: poll })
     }
 }
 
-fn parse_event(event: libevdev::InputEvent) -> Option<InputEvent> {
-    use InputEvent::*;
-    match event.type_ {
-        codes::EV_SYN => None,
-        codes::EV_KEY => match event.value {
+fn parse_event(event: evdev::raw::input_event) -> Option<Event> {
+    use Event::*;
+
+    trace!("processing event: {:?}", event);
+
+    match event._type {
+        EV_SYN => None,
+        EV_KEY => match event.value {
             0 => Some(ButtonRelease {
-                button: ButtonID(event.code as u32),
+                button: ButtonId(event.code as u32),
             }),
             1 => Some(ButtonPress {
-                button: ButtonID(event.code as u32),
+                button: ButtonId(event.code as u32),
             }),
             2 => None,      // Key repeat
             x => {
@@ -92,23 +94,17 @@ fn parse_event(event: libevdev::InputEvent) -> Option<InputEvent> {
                 None
             },
         },
-        codes::EV_ABS => Some(Motion {
-            axis: AxisID((codes::REL_CNT + event.code) as u32),
+        EV_ABS => Some(Motion {
+            axis: AxisId((REL_CNT + event.code) as u32),
             value: event.value as f64,
         }),
-        codes::EV_REL => Some(Motion {
-            axis: AxisID(event.code as u32),
+        EV_REL => Some(Motion {
+            axis: AxisId(event.code as u32),
             value: event.value as f64,
         }),
-        codes::EV_MSC => None,
-        ty => {
-            warn!("unrecognized evdev event: type {}, code {}",
-                  libevdev::event_type_get_name(ty as u32)
-                  .map(OsStr::to_string_lossy)
-                  .unwrap_or(Cow::Owned(ty.to_string())),
-                  libevdev::event_code_get_name(ty as u32, event.code as u32)
-                  .map(OsStr::to_string_lossy)
-                  .unwrap_or(Cow::Owned(event.code.to_string())));
+        EV_MSC => None,
+        _ => {
+            warn!("unrecognized evdev event: type {}, code {}", event._type, event.code);
             None
         },
     }
@@ -116,32 +112,19 @@ fn parse_event(event: libevdev::InputEvent) -> Option<InputEvent> {
 
 
 impl futures::stream::Stream for Device {
-    type Item = InputEvent;
-    type Error = Void;
+    type Item = Event;
+    type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if Async::NotReady == self.io.poll_read() {
             return Ok(Async::NotReady);
         }
-        loop {
-            use super::platform::libevdev::ReadStatus::*;
-            match self.io.get_ref().0.next_event(self.flag) {
-                Again => {
-                    self.flag = libevdev::READ_FLAG_NORMAL;
-                    self.io.need_read();
-                    return Ok(Async::NotReady);
-                },
-                Sync(e) => {
-                    self.flag = libevdev::READ_FLAG_SYNC;
-                    if let Some(e) = parse_event(e) {
-                        return Ok(Async::Ready(Some(e)));
-                    }
-                },
-                Success(e) => {
-                    if let Some(e) = parse_event(e) {
-                        return Ok(Async::Ready(Some(e)));
-                    }
-                },
+        let e = self.io.get_mut().0.events()?.filter_map(parse_event).next();
+        match e {
+            Some(x) => Ok(Async::Ready(Some(x))),
+            None => {
+                self.io.need_read();
+                Ok(Async::NotReady)
             }
         }
     }
@@ -178,7 +161,7 @@ impl Monitor {
             let mut enumerate = try!(udev::Enumerate::new(&udev));
             try!(enumerate.add_match_subsystem(CStr::from_bytes_with_nul(b"input\0").unwrap()));
             enumerate.into_iter().filter_map(|x| x.devnode().map(|dev| {
-                MonitorEvent::Add { sysname: x.sysname().to_owned(), devnode: dev.to_owned() }
+                MonitorEvent::Add { sysname: x.sysname().to_owned(), devnode: PathBuf::from(OsStr::from_bytes(dev.to_bytes())) }
             })).collect()
         };
         
@@ -193,7 +176,7 @@ impl Monitor {
 
 #[derive(Debug, Clone)]
 enum MonitorEvent {
-    Add { sysname: CString, devnode: CString },
+    Add { sysname: CString, devnode: PathBuf },
     Remove { sysname: CString },
 }
 
@@ -223,7 +206,7 @@ impl futures::stream::Stream for Monitor {
                             None => {},
                             Some(node) => return Ok(Async::Ready(Some(Add {
                                 sysname: device.sysname().to_owned(),
-                                devnode: node.to_owned(),
+                                devnode: PathBuf::from(OsStr::from_bytes(node.to_bytes())),
                             }))),
                         },
                         b"remove" =>
@@ -248,7 +231,7 @@ impl Stream {
         Ok(Stream { monitor: monitor, devices: HashMap::new(), handle: handle })
     }
 
-    fn open_device(&mut self, sysname: &CStr, syspath: &CStr) -> io::Result<()> {
+    fn open_device(&mut self, sysname: &CStr, syspath: &Path) -> Result<()> {
         trace!("opening {}", syspath.to_string_lossy());
         let d = Device::new(syspath, &self.handle)?;
         self.devices.insert(sysname.to_owned(), d);
@@ -256,30 +239,32 @@ impl Stream {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct DeviceID(CString);
+#[derive(Clone, Eq, PartialEq, Hash)]
+pub struct DeviceId(CString);
 
-impl common::DeviceID for DeviceID {}
+impl fmt::Debug for DeviceId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 impl futures::stream::Stream for Stream {
-    type Item = (DeviceID, DeviceEvent);
-    type Error = Void;
+    type Item = (DeviceId, Event);
+    type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        use DeviceEvent::*;
-
         // Loop to ensure that if we ignore a monitor event then we don't inadvertently leave buffered events unread and
         // return NotReady
         loop {
-            match self.monitor.poll()? {
+            match self.monitor.poll().unwrap() {
                 Async::NotReady => break,
                 Async::Ready(None) => panic!("Monitor should be an infinite stream"),
                 Async::Ready(Some(MonitorEvent::Add { sysname, devnode })) => match self.open_device(&sysname, &devnode) {
-                    Ok(()) => return Ok(Async::Ready(Some((DeviceID(sysname), DeviceEvent::Added)))),
+                    Ok(()) => return Ok(Async::Ready(Some((DeviceId(sysname), Event::Added)))),
                     Err(e) => debug!("unable to open {}: {}", devnode.to_string_lossy(), e),
                 },
                 Async::Ready(Some(MonitorEvent::Remove { sysname })) => match self.devices.remove(&sysname) {
-                    Some(_) => return Ok(Async::Ready(Some((DeviceID(sysname), DeviceEvent::Removed)))),
+                    Some(_) => return Ok(Async::Ready(Some((DeviceId(sysname), Event::Removed)))),
                     None => (),
                 }
             }
@@ -289,7 +274,7 @@ impl futures::stream::Stream for Stream {
             match device.poll()? {
                 Async::NotReady => (),
                 Async::Ready(None) => panic!("Device should be an infinite stream"),
-                Async::Ready(Some(e)) => return Ok(Async::Ready(Some((DeviceID(sysname.clone()), Input(e))))),
+                Async::Ready(Some(e)) => return Ok(Async::Ready(Some((DeviceId(sysname.clone()), e)))),
             }
         }
 
