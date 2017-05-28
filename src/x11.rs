@@ -253,7 +253,6 @@ impl common::WindowSystem for Context {
 
         // Subscribe to non-raw events
         if self.0.xinput2.is_some() {
-            // Register for device hotplug events
             let mask = xinput2::XI_ButtonPressMask | xinput2::XI_ButtonReleaseMask | xinput2::XI_MotionMask
                 | xinput2::XI_KeyPressMask | xinput2::XI_KeyReleaseMask;
             unsafe {
@@ -265,8 +264,6 @@ impl common::WindowSystem for Context {
                 xinput2::XISelectEvents(self.0.display(), handle,
                                         &mut event_mask as *mut xinput2::XIEventMask, 1);
             };
-
-            self.0.query_device(xinput2::XIAllDevices);
         }
 
         // Opt into application handling of window close
