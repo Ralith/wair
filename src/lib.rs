@@ -29,20 +29,11 @@ pub struct AxisId(pub u32);
 pub struct ButtonId(pub u32);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct Keycode(pub u32);
+pub struct Scancode(pub u32);
 
-impl fmt::Debug for Keycode {
+impl fmt::Debug for Scancode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Keycode({:X})", self.0)
-    }
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct Keysym(pub u32);
-
-impl fmt::Debug for Keysym {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Keysym({:X})", self.0)
+        write!(f, "Scancode({:X})", self.0)
     }
 }
 
@@ -61,17 +52,12 @@ pub enum Event {
         /// This should not change if the user adjusts the host's keyboard map. Use when the physical location of the
         /// key is more important than the key's host GUI semantics, such as for movement controls in a first-person
         /// game.
-        keycode: Keycode,
-
-        /// Identifies the host GUI semantics of the key
-        ///
-        /// Use when the host GUI semantics of the key are more important than the physical location of the key, such as
-        /// when implementing appropriate behavior for "page up." The keysym produced by a key may vary according to
-        /// keymap and modifier state. Do not use for text input.
-        keysym: Keysym,
+        scancode: Scancode,
 
         /// Specifies the text input arising from a keypress
         text: String
     },
-    KeyRelease { keycode: Keycode, keysym: Keysym },
+    KeyRelease { scancode: Scancode },
+    /// `Context::device_scancode_name` may now give different results.
+    KeymapChanged,
 }

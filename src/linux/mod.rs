@@ -14,7 +14,7 @@ use std::io;
 use futures::{self, Poll, Async};
 use tokio_core::reactor::Handle;
 
-use Event;
+use {Event, Scancode};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum DeviceId {
@@ -40,6 +40,15 @@ impl Context {
         Ok((Context { ws: ws }, Stream { ws: ws_events, evdev: evdev }))
     }
 
+    pub fn device_scancode_name(&self, device: DeviceId, code: Scancode) -> String {
+        use self::DeviceId::*;
+        match device {
+            #[cfg(feature = "x11-backend")]
+            X11(id) => self.ws.get_x11().device_scancode_name(id, code),
+            Evdev(_) => panic!("tried to look up scancode from an evdev device, which emits only buttons"),
+        }
+    }
+
     // TODO: device info accessors
 }
 
@@ -47,6 +56,10 @@ enum WindowSystem {
     #[cfg(feature = "x11-backend")]
     X11(x11::Context),
     // TODO: wayland
+}
+
+impl WindowSystem {
+    fn get_x11(&self) -> &x11::Context { match self { &WindowSystem::X11(ref x) => x, _ => panic!("unexpected window system"), } }
 }
 
 enum WSStream {

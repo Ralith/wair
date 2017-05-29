@@ -13,10 +13,15 @@ fn main() {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
 
-    let (_, stream) = Context::new(&handle).unwrap();
+    let (context, stream) = Context::new(&handle).unwrap();
 
-    l.run(stream.for_each(|e| {
-        println!("{:?}", e);
+    l.run(stream.for_each(|(id, e)| {
+        println!("{:?}: {:?}", id, e);
+        use Event::*;
+        match e {
+            KeyPress { scancode, .. } => println!("{}", context.device_scancode_name(id, scancode)),
+            _ => {}
+        }
         Ok(())
     })).unwrap();
 }

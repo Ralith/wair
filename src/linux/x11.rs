@@ -20,6 +20,7 @@ use std::collections::{VecDeque, HashMap};
 use std::ffi::CStr;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+use std::cell::RefCell;
 
 use libc::*;
 use super::xcb;
@@ -29,7 +30,7 @@ use mio;
 use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 
-use {Event, AxisId, ButtonId, Keycode, Keysym};
+use {Event, AxisId, ButtonId, Scancode};
 
 #[derive(Debug, Copy, Clone)]
 struct Extension {
@@ -41,12 +42,14 @@ struct Extension {
 struct Keyboard {
     map: xkb::Keymap,
     state: xkb::State,
+    initial_state: xkb::State,
 }
 
 struct Shared {
     xcb: xcb::Connection,
     xinput2: Option<Extension>,
     atoms: Atoms,
+    keyboards: HashMap<DeviceId, Keyboard>,
 }
 
 impl Shared {
@@ -91,6 +94,7 @@ impl Shared {
             xcb: xcb,
             xinput2: xinput2,
             atoms: atoms,
+            keyboards: HashMap::new(),
         })
     }
 
@@ -107,7 +111,7 @@ impl Shared {
     }
 }
 
-pub struct Context(Rc<Shared>);
+pub struct Context(Rc<RefCell<Shared>>);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct DeviceId(i32);
@@ -123,20 +127,19 @@ struct Atoms {
     device_node: xlib::Atom,
 }
 
-struct StreamInner(Rc<Shared>);
+struct StreamInner(Rc<RefCell<Shared>>);
 
 pub struct Stream {
     io: PollEvented<StreamInner>,
     buffer: VecDeque<(DeviceId, Event)>,
     xkb: xkb::Context,
     xkb_base_event: u8,
-    keyboards: HashMap<DeviceId, Keyboard>,
 }
 
 
 impl AsRawFd for StreamInner {
     fn as_raw_fd(&self) -> RawFd {
-        unsafe { xlib::XConnectionNumber(self.0.display()) }
+        unsafe { xlib::XConnectionNumber(self.0.borrow().display()) }
     }
 }
 
@@ -144,7 +147,7 @@ impl Context {
     pub fn new(handle: &Handle) -> io::Result<(Context, Stream)> {
         let shared = match Shared::new() {
             None => return Err(io::Error::new(io::ErrorKind::Other, "unable to connect to display")),
-            Some(x) => Rc::new(x),
+            Some(x) => Rc::new(RefCell::new(x)),
         };
         
         let ctx = Context(shared.clone());
@@ -152,21 +155,27 @@ impl Context {
         Ok((ctx, stream))
     }
 
-    pub fn flush(&self) {
-        unsafe { xlib::XFlush(self.0.display()); };
+    fn flush(&self) {
+        unsafe { xlib::XFlush(self.0.borrow().display()); };
     }
 
-    pub fn keysym_name(key: Keysym) -> String {
+    fn keysym_name(key: Keysym) -> String {
         self::xkbcommon::xkb::keysym_get_name(key.0)
     }
 
-    pub fn keysym_from_name(name: &str) -> Option<Keysym> {
+    fn keysym_from_name(name: &str) -> Option<Keysym> {
         let sym = self::xkbcommon::xkb::keysym_from_name(name, 0);
         if sym == xkb::keysyms::KEY_NoSymbol {
             None
         } else {
             Some(Keysym(sym))
         }
+    }
+
+    pub fn device_scancode_name(&self, device: DeviceId, scancode: Scancode) -> String {
+        let kb: &Keyboard = &self.0.borrow().keyboards[&device];
+        let sym = kb.initial_state.key_get_one_sym(scancode.0);
+        xkb::keysym_get_name(sym)
     }
 }
 
@@ -187,7 +196,7 @@ impl mio::Evented for StreamInner {
 }
 
 impl Stream {
-    fn new(shared: Rc<Shared>, handle: &Handle) -> io::Result<Stream> {
+    fn new(shared: Rc<RefCell<Shared>>, handle: &Handle) -> io::Result<Stream> {
         let io = try!(PollEvented::new(StreamInner(shared), handle));
         let xkb_base_event = unsafe {
             let mut major_xkb_version = mem::uninitialized();
@@ -195,7 +204,7 @@ impl Stream {
             let mut base_event = mem::uninitialized();
             let mut base_error = mem::uninitialized();
             let success = xkb::x11::setup_xkb_extension(
-                &io.get_ref().0.xcb, xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION,
+                &io.get_ref().0.borrow().xcb, xkb::x11::MIN_MAJOR_XKB_VERSION, xkb::x11::MIN_MINOR_XKB_VERSION,
                 xkb::x11::SetupXkbExtensionFlags::NoFlags,
                 &mut major_xkb_version, &mut minor_xkb_version,
                 &mut base_event, &mut base_error);
@@ -209,11 +218,10 @@ impl Stream {
             buffer: VecDeque::new(),
             xkb: xkb::Context::new(0),
             xkb_base_event: xkb_base_event,
-            keyboards: HashMap::new(),
         };
 
         let devices =
-            if result.io.get_ref().0.xinput2.is_some() {
+            if result.io.get_ref().0.borrow().xinput2.is_some() {
                 // Register for device hotplug events
                 let mask = xinput2::XI_HierarchyChangedMask;
                 unsafe {
@@ -226,7 +234,7 @@ impl Stream {
                                             &mut event_mask as *mut xinput2::XIEventMask, 1);
                 };
 
-                result.io.get_ref().0.query_device(xinput2::XIAllDevices)
+                result.io.get_ref().0.borrow().query_device(xinput2::XIAllDevices)
             } else {
                 Vec::new()
             };
@@ -238,11 +246,7 @@ impl Stream {
     }
 
     fn display(&self) -> *mut xlib::Display {
-        self.io.get_ref().0.display()
-    }
-
-    fn connection(&self) -> &xcb::Connection {
-        &self.io.get_ref().0.xcb
+        self.io.get_ref().0.borrow().display()
     }
 
     fn default_root(&self) -> xlib::Window {
@@ -296,12 +300,16 @@ impl Stream {
             let class = unsafe { &**class_ptr };
             match class._type {
                 XIKeyClass => {
-                    let map = xkb::x11::keymap_new_from_device(&self.xkb, self.connection(), device.0, 0);
-                    let state = xkb::x11::state_new_from_device(&map, self.connection(), device.0);
-                    self.keyboards.insert(device, Keyboard {
-                        map: map,
-                        state: state,
-                    });
+                    {
+                        let mut shared = self.io.get_mut().0.borrow_mut();
+                        let map = xkb::x11::keymap_new_from_device(&self.xkb, &shared.xcb, device.0, 0);
+                        let state = xkb::x11::state_new_from_device(&map, &shared.xcb, device.0);
+                        shared.keyboards.insert(device, Keyboard {
+                            map: map,
+                            initial_state: xkb::State::new(&state.get_keymap()),
+                            state: state,
+                        });
+                    }
                     let mask = (xlib::XkbNewKeyboardNotifyMask | xlib::XkbMapNotifyMask | xlib::XkbStateNotifyMask) as u32;
                     unsafe { xlib::XkbSelectEvents(self.display(), device.0 as u32, mask, mask); };
                 },
@@ -343,7 +351,8 @@ impl Stream {
             GenericEvent => {
                 let mut xcookie = &mut XGenericEventCookie::from(storage);
                 let mut handled = false;
-                if let Some(opcode) = self.io.get_ref().0.xinput2.as_ref().map(|ext| ext.opcode) {
+                let opcode = self.io.get_ref().0.borrow().xinput2.as_ref().map(|ext| ext.opcode);
+                if let Some(opcode) = opcode {
                     if xcookie.extension == opcode {
                         handled = true;
                         unsafe { xlib::XGetEventData(self.display(), xcookie as *mut xlib::XGenericEventCookie); };
@@ -377,32 +386,30 @@ impl Stream {
                             },
                             XI_RawKeyPress => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
-                                let kb = &self.keyboards[&DeviceId(evt.deviceid)];
+                                let kb = &self.io.get_ref().0.borrow().keyboards[&DeviceId(evt.deviceid)];
                                 self.buffer.push_back((DeviceId(evt.deviceid), Event::KeyPress {
-                                    keycode: Keycode(evt.detail as u32),
-                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    scancode: Scancode(evt.detail as u32),
                                     text: kb.state.key_get_utf8(evt.detail as u32),
                                 }));
                             },
                             XI_RawKeyRelease => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
-                                let kb = &self.keyboards[&DeviceId(evt.deviceid)];
                                 self.buffer.push_back((DeviceId(evt.deviceid), Event::KeyRelease {
-                                    keycode: Keycode(evt.detail as u32),
-                                    keysym: Keysym(kb.state.key_get_one_sym(evt.detail as u32)),
+                                    scancode: Scancode(evt.detail as u32),
                                 }));
                             },
                             XI_HierarchyChanged => {
                                 let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIHierarchyEvent>(xcookie.data) };
                                 for info in unsafe { slice::from_raw_parts(evt.info, evt.num_info as usize) } {
                                     if 0 != info.flags & (XISlaveAdded | XIMasterAdded) {
-                                        for di in self.io.get_ref().0.query_device(info.deviceid) {
+                                        let infos = self.io.get_ref().0.borrow().query_device(info.deviceid);
+                                        for di in infos {
                                             self.buffer.push_back((DeviceId(di.deviceid), Event::Added));
                                             self.open_device(&di);
                                         }
                                     } else if 0 != info.flags & (XISlaveRemoved | XIMasterRemoved) {
                                         let id = DeviceId(info.deviceid);
-                                        self.keyboards.remove(&id);
+                                        self.io.get_mut().0.borrow_mut().keyboards.remove(&id);
                                         self.buffer.push_back((id, Event::Removed));
                                     }
                                 }
@@ -420,19 +427,23 @@ impl Stream {
             },
             ty => {
                 if ty == self.xkb_base_event as i32 {
-                    let conn = &self.io.get_ref().0.xcb; // Manually inlined call to connection() to satisfy borrowck
+                    let mut shared = self.io.get_mut().0.borrow_mut();
                     let xkb_event = unsafe { mem::transmute::<&XEvent, &XkbAnyEvent>(&storage) };
-                    let mut kb = self.keyboards.get_mut(&DeviceId(xkb_event.device as i32)).expect("unknown keyboard");
+                    let id = DeviceId(xkb_event.device as i32);
                     match xkb_event.xkb_type {
-                        XkbNewKeyboardNotify => {
-                            kb.map = self::xkbcommon::xkb::x11::keymap_new_from_device(&self.xkb, conn, xkb_event.device as i32, 0);
-                            kb.state = self::xkbcommon::xkb::x11::state_new_from_device(&kb.map, conn, xkb_event.device as i32);
-                        },
+                        XkbNewKeyboardNotify => {} // Handled by hierarchy change events
                         XkbMapNotify => {
-                            kb.map = self::xkbcommon::xkb::x11::keymap_new_from_device(&self.xkb, conn, xkb_event.device as i32, 0);
-                            kb.state = self::xkbcommon::xkb::x11::state_new_from_device(&kb.map, conn, xkb_event.device as i32);
+                            let map = self::xkbcommon::xkb::x11::keymap_new_from_device(&self.xkb, &shared.xcb, xkb_event.device as i32, 0);
+                            let state = self::xkbcommon::xkb::x11::state_new_from_device(&map, &shared.xcb, xkb_event.device as i32);
+                            let initial_state = self::xkbcommon::xkb::State::new(&state.get_keymap());
+                            let mut kb = shared.keyboards.get_mut(&id).expect("unknown keyboard");
+                            kb.map = map;
+                            kb.state = state;
+                            kb.initial_state = initial_state;
+                            self.buffer.push_back((id, Event::KeymapChanged));
                         },
                         XkbStateNotify => {
+                            let mut kb = shared.keyboards.get_mut(&id).expect("unknown keyboard");
                             let state = unsafe { mem::transmute::<&XEvent, &XkbStateNotifyEvent>(&storage) };
                             kb.state.update_mask(state.base_mods, state.latched_mods, state.locked_mods,
                                                  state.base_group as u32, state.latched_group as u32, state.locked_group as u32);
