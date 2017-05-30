@@ -155,23 +155,6 @@ impl Context {
         Ok((ctx, stream))
     }
 
-    fn flush(&self) {
-        unsafe { xlib::XFlush(self.0.borrow().display()); };
-    }
-
-    fn keysym_name(key: Keysym) -> String {
-        self::xkbcommon::xkb::keysym_get_name(key.0)
-    }
-
-    fn keysym_from_name(name: &str) -> Option<Keysym> {
-        let sym = self::xkbcommon::xkb::keysym_from_name(name, 0);
-        if sym == xkb::keysyms::KEY_NoSymbol {
-            None
-        } else {
-            Some(Keysym(sym))
-        }
-    }
-
     pub fn device_scancode_name(&self, device: DeviceId, scancode: Scancode) -> String {
         let kb: &Keyboard = &self.0.borrow().keyboards[&device];
         let sym = kb.initial_state.key_get_one_sym(scancode.0);
