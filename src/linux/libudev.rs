@@ -8,7 +8,7 @@ use std::ops::Deref;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::marker::PhantomData;
 
-use libc::c_char;
+use libc::{c_char, dev_t};
 
 use self::libudev_sys::*;
 
@@ -19,6 +19,18 @@ macro_rules! try_alloc {
 
         if ptr.is_null() {
             return Err(io::Error::from_raw_os_error(::libc::ENOMEM));
+        }
+
+        ptr
+    }}
+}
+
+macro_rules! try_errno {
+    ($exp:expr) => {{
+        let ptr = $exp;
+
+        if ptr.is_null() {
+            return Err(io::Error::last_os_error());
         }
 
         ptr
@@ -57,9 +69,34 @@ unsafe fn option_cstr<'a>(x: *const c_char) -> Option<&'a CStr> {
     }
 }
 
+pub enum DevType {
+    Character,
+    Block,
+}
+
 impl<'a> Device<'a> {
     pub fn new_from_syspath(context: &'a Context, path: &CStr) -> io::Result<Device<'a>> {
-        Ok(Device(try_alloc!(unsafe { udev_device_new_from_syspath(context.0, path.as_ptr()) }), PhantomData))
+        Ok(Device(try_errno!(unsafe { udev_device_new_from_syspath(context.0, path.as_ptr()) }), PhantomData))
+    }
+
+    pub fn new_from_devnum(context: &'a Context, ty: DevType, num: dev_t) -> io::Result<Device<'a>> {
+        use self::DevType::*;
+        Ok(Device(try_errno!(unsafe {
+            udev_device_new_from_devnum(context.0, match ty { Character => b'c', Block => b'b' } as i8, num)
+        }), PhantomData))
+    }
+
+    // Device get_parent(const char *subsystem = nullptr, const char *devtype = nullptr) const {
+    //     if(subsystem || devtype)
+    //         return udev_device_get_parent_with_subsystem_devtype(handle, subsystem, devtype);
+    //     return udev_device_get_parent(handle);
+    // }
+    pub fn find_parent(&self, subsystem: Option<&CStr>, devtype: Option<&CStr>) -> Device {
+        unsafe { Device(udev_device_get_parent_with_subsystem_devtype(self.0, subsystem.map_or(ptr::null(), |x| x.as_ptr()), devtype.map_or(ptr::null(), |x| x.as_ptr())), PhantomData) }
+    }
+
+    pub fn sysattr_value(&self, key: &CStr) -> Option<&CStr> {
+        unsafe { option_cstr(udev_device_get_sysattr_value(self.0, key.as_ptr())) }
     }
 
     pub fn action(&self) -> &CStr {
@@ -88,6 +125,14 @@ impl<'a> Device<'a> {
 
     pub fn driver(&self) -> Option<&CStr> {
         unsafe { option_cstr(udev_device_get_driver(self.0)) }
+    }
+
+    pub fn devnum(&self) -> io::Result<dev_t> {
+        let r = unsafe { udev_device_get_devnum(self.0) };
+        if r == 0 {
+            return Err(io::Error::last_os_error())
+        }
+        Ok(r)
     }
 }
 

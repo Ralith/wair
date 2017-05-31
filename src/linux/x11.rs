@@ -23,14 +23,17 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use libc::*;
+use super::nix;
 use super::xcb;
+use super::libudev as udev;
+use super::helpers::dev_hwid;
 
 use void::Void;
 use mio;
 use tokio_core::reactor::{PollEvented, Handle};
 use futures;
 
-use {Event, AxisId, ButtonId, Scancode};
+use {Event, RelAxisId, AbsAxisId, ButtonId, Scancode, DeviceHwId};
 
 #[derive(Debug, Copy, Clone)]
 struct Extension {
@@ -50,10 +53,11 @@ struct Shared {
     xinput2: Option<Extension>,
     atoms: Atoms,
     keyboards: HashMap<DeviceId, Keyboard>,
+    udev: udev::Context,
 }
 
 impl Shared {
-    fn new() -> Option<Shared> {
+    fn new(udev: udev::Context) -> Option<Shared> {
         unsafe { xlib::XInitThreads(); };
         let d = unsafe { xlib::XOpenDisplay(ptr::null()) };
         if d.is_null() {
@@ -95,6 +99,7 @@ impl Shared {
             xinput2: xinput2,
             atoms: atoms,
             keyboards: HashMap::new(),
+            udev: udev,
         })
     }
 
@@ -108,6 +113,33 @@ impl Shared {
             let info = xinput2::XIQueryDevice(self.display(), device, &mut size as *mut c_int);
             slice::from_raw_parts(info, size as usize).to_vec()
         }
+    }
+
+    fn atom_name(&self, atom: xlib::Atom) -> String {
+        unsafe { CStr::from_ptr(xlib::XGetAtomName(self.display(), atom)).to_string_lossy().into_owned() }
+    }
+
+    fn get_property(&self, device: DeviceId, property: xlib::Atom) -> Option<Vec<u8>> {
+        let mut value = Vec::new();
+
+        unsafe {
+            let mut actual_type = mem::uninitialized();
+            let mut actual_format = mem::uninitialized();
+            let mut raw_data = mem::uninitialized();
+            let mut size = 128;
+            let mut bytes_after = 1;
+            while bytes_after != 0 {
+                let result = xinput2::XIGetProperty(self.display(), device.0, property, value.len() as i64, 128, xlib::False, xlib::AnyPropertyType as u64,
+                                                    &mut actual_type, &mut actual_format, &mut size, &mut bytes_after, &mut raw_data);
+                if result != xlib::Success as i32 { xlib::XFree(raw_data as *mut _); return None; }
+                if actual_format == 0 { return None; } // No such property
+                assert!(actual_format == 8);
+                value.extend_from_slice(slice::from_raw_parts(raw_data, size as usize));
+                xlib::XFree(raw_data as *mut _);
+            }
+        }
+
+        Some(value)
     }
 }
 
@@ -129,11 +161,16 @@ struct Atoms {
 
 struct StreamInner(Rc<RefCell<Shared>>);
 
+struct DeviceInfo {
+    abs_axes: Vec<u32>,
+}
+
 pub struct Stream {
     io: PollEvented<StreamInner>,
     buffer: VecDeque<(DeviceId, Event)>,
     xkb: xkb::Context,
     xkb_base_event: u8,
+    device_info: HashMap<DeviceId, DeviceInfo>,
 }
 
 
@@ -145,7 +182,8 @@ impl AsRawFd for StreamInner {
 
 impl Context {
     pub fn new(handle: &Handle) -> io::Result<(Context, Stream)> {
-        let shared = match Shared::new() {
+        let udev = udev::Context::new()?;
+        let shared = match Shared::new(udev) {
             None => return Err(io::Error::new(io::ErrorKind::Other, "unable to connect to display")),
             Some(x) => Rc::new(RefCell::new(x)),
         };
@@ -159,6 +197,48 @@ impl Context {
         let kb: &Keyboard = &self.0.borrow().keyboards[&device];
         let sym = kb.initial_state.key_get_one_sym(scancode.0);
         xkb::keysym_get_name(sym)
+    }
+
+    pub fn device_hw_id(&self, device: DeviceId) -> Option<DeviceHwId> {
+        let shared = self.0.borrow();
+
+        let devnode = if let Some(x) = shared.get_property(device, shared.atoms.device_node) { x } else { return None };
+        let statbuf = if let Ok(x) = nix::sys::stat::stat(&devnode[..]) { x } else { return None };
+        let devty = if statbuf.st_mode & nix::sys::stat::S_IFCHR.bits() != 0 {
+            udev::DevType::Character
+        } else if statbuf.st_mode & nix::sys::stat::S_IFBLK.bits() != 0 {
+            udev::DevType::Block
+        } else {
+            return None
+        };
+        dev_hwid(&shared.udev, devty, statbuf.st_rdev)
+    }
+
+    pub fn device_name(&self, device: DeviceId) -> String {
+        let name = unsafe {
+            let mut size = mem::uninitialized();
+            let info = xinput2::XIQueryDevice(self.0.borrow().display(), device.0, &mut size);
+            CStr::from_ptr((*info).name)
+        };
+        name.to_string_lossy().into_owned()
+    }
+
+    pub fn device_port(&self, device: DeviceId) -> Option<String> {
+        let shared = self.0.borrow();
+
+        let devnode = if let Some(x) = shared.get_property(device, shared.atoms.device_node) { x } else { return None };
+        let statbuf = if let Ok(x) = nix::sys::stat::stat(&devnode[..]) { x } else { return None };
+        let devty = if statbuf.st_mode & nix::sys::stat::S_IFCHR.bits() != 0 {
+            udev::DevType::Character
+        } else if statbuf.st_mode & nix::sys::stat::S_IFBLK.bits() != 0 {
+            udev::DevType::Block
+        } else {
+            return None
+        };
+        let udevice = if let Ok(x) = udev::Device::new_from_devnum(&shared.udev, devty, statbuf.st_rdev) { x } else { return None };
+        let input = unsafe { udevice.find_parent(Some(CStr::from_bytes_with_nul_unchecked(b"input\0")), None) };
+        let port = unsafe { input.sysattr_value(CStr::from_bytes_with_nul_unchecked(b"phys\0")) };
+        port.map(|x| x.to_string_lossy().into_owned())
     }
 }
 
@@ -201,6 +281,7 @@ impl Stream {
             buffer: VecDeque::new(),
             xkb: xkb::Context::new(0),
             xkb_base_event: xkb_base_event,
+            device_info: HashMap::new(),
         };
 
         let devices =
@@ -210,7 +291,7 @@ impl Stream {
                 unsafe {
                     let mut event_mask = xinput2::XIEventMask{
                         deviceid: xinput2::XIAllDevices,
-                        mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
+                        mask: &mask as *const i32 as *mut _,
                         mask_len: mem::size_of_val(&mask) as c_int,
                     };
                     xinput2::XISelectEvents(result.display(), result.default_root(),
@@ -248,11 +329,6 @@ impl Stream {
         unsafe { xlib::XPending(self.display()) }
     }
 
-    fn atom_name(&self, atom: xlib::Atom) -> String {
-        unsafe { CStr::from_ptr(xlib::XGetAtomName(self.display(), atom)).to_string_lossy().into_owned() }
-    }
-
-
     #[allow(non_upper_case_globals)]
     fn open_device(&mut self, info: &xinput2::XIDeviceInfo) {
         let device = DeviceId(info.deviceid);
@@ -269,12 +345,16 @@ impl Stream {
             unsafe {
                 let mut event_mask = xinput2::XIEventMask{
                     deviceid: info.deviceid,
-                    mask: mem::transmute::<*const i32, *mut c_uchar>(&mask as *const i32),
+                    mask: &mask as *const i32 as *mut _,
                     mask_len: mem::size_of_val(&mask) as c_int,
                 };
                 xinput2::XISelectEvents(self.display(), self.default_root(), &mut event_mask as *mut xinput2::XIEventMask, 1);
             };
         }
+
+        let mut info_out = DeviceInfo {
+            abs_axes: Vec::new(),
+        };
 
         let classes : &[*const xinput2::XIAnyClassInfo] =
             unsafe { slice::from_raw_parts(info.classes as *const *const xinput2::XIAnyClassInfo, info.num_classes as usize) };
@@ -312,10 +392,20 @@ impl Stream {
                 XIValuatorClass => {
                     if real_device {
                         let axis_info = unsafe { mem::transmute::<&XIAnyClassInfo, &XIValuatorClassInfo>(class) };
-                        self.buffer.push_back((device, Event::Motion {
-                            axis: AxisId(axis_info.number as u32),
-                            value: axis_info.value
-                        }));
+                        match axis_info.mode {
+                            xinput2::XIModeRelative => self.buffer.push_back((device, Event::RelMotion {
+                                axis: RelAxisId(axis_info.number as u32),
+                                value: axis_info.value
+                            })),
+                            xinput2::XIModeAbsolute => {
+                                info_out.abs_axes.push(axis_info.number as u32);
+                                self.buffer.push_back((device, Event::AbsMotion {
+                                    axis: AbsAxisId(axis_info.number as u32),
+                                    value: axis_info.value
+                                }))
+                            }
+                            _ => unreachable!(),
+                        }
                     }
                 },
                 ty => {
@@ -323,6 +413,8 @@ impl Stream {
                 },
             }
         }
+
+        self.device_info.insert(device, info_out);
     }
 
     #[allow(non_upper_case_globals)]
@@ -342,33 +434,42 @@ impl Stream {
                         use self::x11::xinput2::*;
                         match xcookie.evtype {
                             XI_RawMotion => {
-                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                let evt = unsafe { &*(xcookie.data as *const XIRawEvent) };
                                 let mask = unsafe { slice::from_raw_parts(evt.valuators.mask, evt.valuators.mask_len as usize) };
                                 let mut raw_value = evt.raw_values;
+                                let id = DeviceId(evt.deviceid);
+                                let info = &self.device_info[&id];
                                 for i in 0..evt.valuators.mask_len*8 {
                                     if XIMaskIsSet(mask, i) {
-                                        self.buffer.push_back((DeviceId(evt.deviceid), Event::Motion {
-                                            axis: AxisId(i as u32),
-                                            value: unsafe { *raw_value }
+                                        self.buffer.push_back((id, if info.abs_axes.contains(&(i as u32)) {
+                                            Event::AbsMotion {
+                                                axis: AbsAxisId(i as u32),
+                                                value: unsafe { *raw_value }
+                                            }
+                                        } else {
+                                            Event::RelMotion {
+                                                axis: RelAxisId(i as u32),
+                                                value: unsafe { *raw_value }
+                                            }
                                         }));
                                         raw_value = unsafe { raw_value.offset(1) };
                                     }
                                 }
                             },
                             XI_RawButtonPress => {
-                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                let evt = unsafe { &*(xcookie.data as *const XIRawEvent) };
                                 self.buffer.push_back((DeviceId(evt.deviceid), Event::ButtonPress {
                                     button: ButtonId(evt.detail as u32),
                                 }));
                             },
                             XI_RawButtonRelease => {
-                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                let evt = unsafe { &*(xcookie.data as *const XIRawEvent) };
                                 self.buffer.push_back((DeviceId(evt.deviceid), Event::ButtonRelease {
                                     button: ButtonId(evt.detail as u32),
                                 }));
                             },
                             XI_RawKeyPress => {
-                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                let evt = unsafe { &*(xcookie.data as *const XIRawEvent) };
                                 let kb = &self.io.get_ref().0.borrow().keyboards[&DeviceId(evt.deviceid)];
                                 self.buffer.push_back((DeviceId(evt.deviceid), Event::KeyPress {
                                     scancode: Scancode(evt.detail as u32),
@@ -376,13 +477,13 @@ impl Stream {
                                 }));
                             },
                             XI_RawKeyRelease => {
-                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIRawEvent>(xcookie.data) };
+                                let evt = unsafe { &*(xcookie.data as *const XIRawEvent) };
                                 self.buffer.push_back((DeviceId(evt.deviceid), Event::KeyRelease {
                                     scancode: Scancode(evt.detail as u32),
                                 }));
                             },
                             XI_HierarchyChanged => {
-                                let evt = unsafe { &*mem::transmute::<*const ::std::os::raw::c_void, *const XIHierarchyEvent>(xcookie.data) };
+                                let evt = unsafe { &*(xcookie.data as *const XIHierarchyEvent) };
                                 for info in unsafe { slice::from_raw_parts(evt.info, evt.num_info as usize) } {
                                     if 0 != info.flags & (XISlaveAdded | XIMasterAdded) {
                                         let infos = self.io.get_ref().0.borrow().query_device(info.deviceid);

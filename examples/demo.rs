@@ -19,6 +19,17 @@ fn main() {
         println!("{:?}: {:?}", id, e);
         use Event::*;
         match e {
+            Added => {
+                print!("{}", context.device_name(id));
+                if let Some(port) = context.device_port(id.clone()) {
+                    print!(" on {}", port);
+                }
+                if let Some(hwid) = context.device_hw_id(id.clone()) {
+                    println!(": {}", hwid);
+                } else {
+                    println!("");
+                }
+            },
             KeyPress { scancode, .. } => println!("{}", context.device_scancode_name(id, scancode)),
             _ => {}
         }

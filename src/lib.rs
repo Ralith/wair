@@ -18,22 +18,37 @@ mod platform;
 #[path="linux/mod.rs"]
 mod platform;
 
-pub use platform::{DeviceId, Context};
+pub use platform::{DeviceId, Context, Stream};
 
 use std::fmt;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct AxisId(pub u32);
+pub struct RelAxisId(pub u32);
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct AbsAxisId(pub u32);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct ButtonId(pub u32);
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Scancode(pub u32);
 
-impl fmt::Debug for Scancode {
+impl fmt::Display for Scancode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Scancode({:X})", self.0)
+        write!(f, "{:X}", self.0)
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct DeviceHwId {
+    vendor: u16,
+    product: u16,
+}
+
+impl fmt::Display for DeviceHwId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:04x}:{:04x}", self.vendor, self.product)
     }
 }
 
@@ -43,7 +58,8 @@ pub enum Event {
     Added,
     /// An existing device has been removed from the system
     Removed,
-    Motion { axis: AxisId, value: f64 },
+    RelMotion { axis: RelAxisId, value: f64 },
+    AbsMotion { axis: AbsAxisId, value: f64 },
     ButtonPress { button: ButtonId },
     ButtonRelease { button: ButtonId },
     KeyPress {
